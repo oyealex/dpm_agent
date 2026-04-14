@@ -6,6 +6,7 @@ Requires-Python: >=3.11
 Description-Content-Type: text/markdown
 Requires-Dist: deepagents>=0.4.5
 Requires-Dist: httpx[socks]>=0.28.0
+Requires-Dist: langchain-core>=0.3.0
 Requires-Dist: langchain-openai>=0.3.0
 Requires-Dist: pydantic>=2.7.0
 Requires-Dist: pydantic-settings>=2.3.0
@@ -24,14 +25,26 @@ Requires-Dist: uvicorn>=0.30.0; extra == "api"
 
 ## 架构概览
 
-- `src/dpm_agent/agent_factory.py`
-  - 创建和配置 DeepAgents 实例
-- `src/dpm_agent/service.py`
-  - 编排一次对话请求：加载历史、调用 agent、写入 SQLite
-- `src/dpm_agent/db.py`
-  - SQLite 初始化与连接
-- `src/dpm_agent/repository.py`
-  - 会话、消息、记忆元数据读写
+- `src/dpm_agent/core/`
+  - Agent 运行核心，负责创建 DeepAgents runtime、装配模型、skills、memory、session 文件 backend 和工具提供器
+- `src/dpm_agent/core/service.py`
+  - 应用服务层，编排一次对话请求：加载历史、调用 agent、归一化事件、写入 SQLite
+- `src/dpm_agent/core/events.py`
+  - DeepAgents/LangGraph 流事件解析、过滤和去重
+- `src/dpm_agent/core/tools.py`
+  - Agent 可用工具的扩展接口，后续自定义 tool 通过 `AgentToolProvider` 接入
+- `src/dpm_agent/tools/`
+  - 内置和示例工具，目前包含四则运算 `calculator_tool`
+- `src/dpm_agent/storage/`
+  - SQLite 初始化、会话、消息和记忆元数据读写
+- `src/dpm_agent/interfaces/cli/`
+  - CLI 参数解析、交互命令和终端渲染
+- `src/dpm_agent/interfaces/api/`
+  - FastAPI REST API，包含同步 `/chat` 和 SSE 流式 `/chat/stream`
+- `src/dpm_agent/application/bootstrap.py`
+  - 应用装配入口，连接配置、数据库、repository、runtime 和 service
+- `src/dpm_agent/*.py`
+  - 顶层兼容模块，保留旧导入路径和 `dpm-agent` 命令入口
 - `memory/`
   - 默认位于 `data/sessions/<session-id>/memory/`，以文件形式维护该会话的长期记忆，作为 agent 启动时的注入上下文
 - `skills/`
@@ -152,3 +165,71 @@ dpm-agent chat --new --message "帮我整理今天的任务"
 首次运行会自动创建 SQLite 表。
 
 CLI 会区分显示用户输入、Agent 流式输出、思考/步骤、工具调用和工具结果。SQLite 的 `messages` 表会通过 `message_type` 和 `metadata_json` 保存这些不同类型的事件；普通历史续聊只会把用户消息和最终助手消息重新送入模型上下文。
+
+## 自定义 Tool 示例
+
+项目内置了一个四则运算示例工具：
+
+- 位置：[src/dpm_agent/tools/calculator.py](src/dpm_agent/tools/calculator.py)
+- 工具名：`calculator_tool`
+- 参数：
+  - `operation`：`add`、`subtract`、`multiply`、`divide`
+  - `left`：左操作数
+  - `right`：右操作数
+
+默认 `build_service()` 会注册这个工具，所以 CLI 和 API 启动后 Agent 可以直接使用它。例如：
+
+```text
+帮我用工具计算 12.5 乘以 8
+```
+
+新增自定义工具的推荐方式：
+
+```python
+from collections.abc import Iterable
+from typing import Any
+
+from langchain_core.tools import tool
+
+
+@tool
+def my_tool(value: str) -> str:
+    """Describe what this tool does for the agent."""
+    return value
+
+
+class MyToolProvider:
+    def tools_for_thread(self, thread_id: str) -> Iterable[Any]:
+        return (my_tool,)
+```
+
+然后在自定义启动代码里传入：
+
+```python
+from dpm_agent.application.bootstrap import build_service
+
+service = build_service(tool_providers=(MyToolProvider(),))
+```
+
+## API
+
+安装 API 依赖后可启动 FastAPI：
+
+```bash
+uvicorn dpm_agent.interfaces.api:app --reload
+```
+
+接口：
+
+- `GET /healthz`：健康检查
+- `POST /chat`：同步对话，返回最终回复
+- `POST /chat/stream`：SSE 流式对话，逐条返回 `AgentEvent`
+
+SSE 请求体与同步接口一致：
+
+```json
+{
+  "thread_id": "default",
+  "message": "帮我整理今天的任务"
+}
+```

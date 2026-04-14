@@ -18,6 +18,14 @@
 
 这一层只负责接收输入和返回结果，不直接操作 DeepAgents。
 
+当前代码位置：
+
+- `dpm_agent.interfaces.cli.parser`：命令行参数。
+- `dpm_agent.interfaces.cli.renderer`：终端事件渲染。
+- `dpm_agent.interfaces.cli.app`：CLI 交互流程。
+- `dpm_agent.interfaces.api.app`：FastAPI app、REST 与 SSE endpoint。
+- `dpm_agent.interfaces.api.sse`：SSE 事件编码。
+
 ### 2. 应用服务层
 
 由 `AgentService` 负责一次完整会话：
@@ -40,9 +48,11 @@
 
 的最佳位置。
 
+当前代码位置：`dpm_agent.core.service.AgentService`。
+
 ### 3. Agent 运行层
 
-`agent_factory.py` 负责创建 DeepAgents 实例，并统一处理：
+`dpm_agent.core.agent` 负责创建 DeepAgents 实例，并统一处理：
 
 - 模型配置
 - 系统提示词
@@ -53,6 +63,28 @@
 
 这里建议把 DeepAgents 当成“可替换引擎”，不要让 SQLite 或产品逻辑反向污染它。
 
+当前代码位置：
+
+- `dpm_agent.core.agent.AgentRuntime`：创建每个 thread 的 DeepAgents runtime。
+- `dpm_agent.core.agent.build_agent`：封装 DeepAgents 初始化。
+- `dpm_agent.core.events`：将 DeepAgents/LangGraph 流输出归一为应用事件。
+- `dpm_agent.core.tools.AgentToolProvider`：自定义工具扩展点。后续可以把 DeepAgents 兼容工具注册到 provider，再由 `AgentRuntime` 注入。
+- `dpm_agent.tools.calculator.CalculatorToolProvider`：内置四则运算示例工具，展示自定义工具的接入方式。
+
+## Tool 扩展方式
+
+工具层采用 provider 模式：
+
+1. 用 `langchain_core.tools.tool` 或 DeepAgents 支持的工具格式定义工具。
+2. 实现 `AgentToolProvider.tools_for_thread(thread_id)`，按会话返回可用工具。
+3. 通过 `build_service(tool_providers=(MyToolProvider(),))` 注入，或加入 `dpm_agent.tools.default_tool_providers()` 作为默认内置工具。
+
+当前示例：
+
+- `dpm_agent.tools.calculator.calculator_tool`
+- 支持 `add`、`subtract`、`multiply`、`divide`
+- 除零时返回错误文本而不是让工具调用崩溃
+
 ### 4. 持久化层
 
 SQLite 存三类核心数据：
@@ -62,6 +94,13 @@ SQLite 存三类核心数据：
 - `memory_entries`：应用侧登记的长期记忆文件
 
 SQLite 对话历史库是应用级共享数据库，默认位于 `./data/agent.sqlite3`。每个会话按照 `thread_id` 分到 `data/sessions/<session-id>`，并拥有独立的 `skills/` 和 `memory/`。CLI 的 `--new` 会生成随机 `thread_id` 来开启新 session。DeepAgents 文件 backend 的根目录就是当前 session 目录，运行期临时文件、中间结果、缓存和生成草稿直接写入该 session 根目录。
+
+当前代码位置：
+
+- `dpm_agent.storage.db`：schema、连接和轻量迁移。
+- `dpm_agent.storage.repository`：`ChatRepository` 与 `MemoryRepository`。
+
+顶层的 `dpm_agent.db`、`dpm_agent.repository`、`dpm_agent.service`、`dpm_agent.agent_factory`、`dpm_agent.api` 和 `dpm_agent.cli` 仅作为兼容导出保留，新代码应优先使用子包路径。
 
 为什么不只依赖 DeepAgents / LangGraph 内部状态：
 
@@ -141,8 +180,8 @@ skills/
 
 优先顺序建议如下：
 
-1. 增加 FastAPI 接口
-2. 增加 OpenAI 之外的模型适配
-3. 增加会话摘要表，控制长线程成本
-4. 增加记忆提取器，把对话自动沉淀到 `memory/`
-5. 增加向量检索，而不是把全部历史都直接送给模型
+1. 增加自定义 Agent 定义层，让不同 Agent 能声明 system prompt、skills、memory 策略和工具 provider。
+2. 增加 OpenAI 之外的模型适配。
+3. 增加会话摘要表，控制长线程成本。
+4. 增加记忆提取器，把对话自动沉淀到 `memory/`。
+5. 增加向量检索，而不是把全部历史都直接送给模型。

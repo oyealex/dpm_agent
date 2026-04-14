@@ -1,5 +1,6 @@
 deepagents>=0.4.5
 httpx[socks]>=0.28.0
+langchain-core>=0.3.0
 langchain-openai>=0.3.0
 pydantic>=2.7.0
 pydantic-settings>=2.3.0
