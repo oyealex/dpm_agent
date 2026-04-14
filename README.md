@@ -203,6 +203,18 @@ service = build_service(tool_providers=(MyToolProvider(),))
 uvicorn dpm_agent.interfaces.api:app --reload
 ```
 
+也可以直接通过 Python 启动：
+
+```bash
+python -m dpm_agent.interfaces.api --host 127.0.0.1 --port 8000
+```
+
+安装为可执行命令后也支持：
+
+```bash
+dpm-agent-api --host 127.0.0.1 --port 8000
+```
+
 接口：
 
 - `GET /healthz`：健康检查

@@ -9,6 +9,9 @@
 - `tools/calculator.py` 提供四则运算自定义工具示例，默认通过 `default_tool_providers()` 注入 Agent runtime。
 - CLI 代码已拆到 `interfaces/cli/`，参数解析、交互流程和终端渲染相互解耦。
 - REST API 代码已拆到 `interfaces/api/`，支持同步 `POST /chat` 和 SSE 流式 `POST /chat/stream`。
+- API 服务可通过 `uvicorn dpm_agent.interfaces.api:app`、`python -m dpm_agent.interfaces.api` 或安装后的 `dpm-agent-api` 命令启动。
+- SQLite connection 已配置 `check_same_thread=False`，并由 `ChatRepository` 与 `MemoryRepository` 共享同一把 `RLock` 串行化访问，避免 FastAPI/Starlette 线程池执行同步 SSE generator 时触发跨线程 SQLite 错误。
+- API SSE 响应与 CLI 一样不返回 `internal_state` 事件，只返回面向调用方可展示的 Agent 过程事件。
 - 支持 `skills/` 目录，技能以 `SKILL.md` 描述。
 - 支持 `memory/` 目录，长期记忆以 Markdown 文件维护。
 - 支持 SQLite 持久化 `threads`、`messages` 和 `memory_entries`。

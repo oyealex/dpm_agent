@@ -21,6 +21,7 @@ api = [
 
 [project.scripts]
 dpm-agent = "dpm_agent.cli:main"
+dpm-agent-api = "dpm_agent.api:main"
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]

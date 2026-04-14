@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS memory_entries (
 
 
 def connect(db_path: Path) -> sqlite3.Connection:
-    connection = sqlite3.connect(db_path)
+    connection = sqlite3.connect(db_path, check_same_thread=False)
     connection.row_factory = sqlite3.Row
     return connection
 

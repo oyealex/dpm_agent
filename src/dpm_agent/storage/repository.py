@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from threading import RLock
 from pathlib import Path
 from typing import Any
 
@@ -10,21 +11,23 @@ from dpm_agent.sanitize import sanitize_metadata, sanitize_text
 
 
 class ChatRepository:
-    def __init__(self, connection: sqlite3.Connection) -> None:
+    def __init__(self, connection: sqlite3.Connection, lock: RLock | None = None) -> None:
         self.connection = connection
+        self.lock = lock or RLock()
 
     def ensure_thread(self, thread_id: str, title: str | None = None) -> None:
         thread_id = sanitize_text(thread_id)
         title = sanitize_text(title) if title is not None else None
-        self.connection.execute(
-            """
-            INSERT INTO threads(id, title)
-            VALUES (?, ?)
-            ON CONFLICT(id) DO UPDATE SET updated_at = CURRENT_TIMESTAMP
-            """,
-            (thread_id, title),
-        )
-        self.connection.commit()
+        with self.lock:
+            self.connection.execute(
+                """
+                INSERT INTO threads(id, title)
+                VALUES (?, ?)
+                ON CONFLICT(id) DO UPDATE SET updated_at = CURRENT_TIMESTAMP
+                """,
+                (thread_id, title),
+            )
+            self.connection.commit()
 
     def add_message(
         self,
@@ -35,28 +38,29 @@ class ChatRepository:
         metadata: dict[str, Any] | None = None,
     ) -> None:
         thread_id = sanitize_text(thread_id)
-        self.connection.execute(
-            """
-            INSERT INTO messages(thread_id, role, message_type, content, metadata_json)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (
-                thread_id,
-                sanitize_text(role),
-                sanitize_text(message_type),
-                sanitize_text(content),
-                json.dumps(sanitize_metadata(metadata), ensure_ascii=False),
-            ),
-        )
-        self.connection.execute(
-            """
-            UPDATE threads
-            SET updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-            """,
-            (thread_id,),
-        )
-        self.connection.commit()
+        with self.lock:
+            self.connection.execute(
+                """
+                INSERT INTO messages(thread_id, role, message_type, content, metadata_json)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    thread_id,
+                    sanitize_text(role),
+                    sanitize_text(message_type),
+                    sanitize_text(content),
+                    json.dumps(sanitize_metadata(metadata), ensure_ascii=False),
+                ),
+            )
+            self.connection.execute(
+                """
+                UPDATE threads
+                SET updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (thread_id,),
+            )
+            self.connection.commit()
 
     def add_event(self, thread_id: str, event: AgentEvent) -> None:
         self.add_message(
@@ -82,36 +86,38 @@ class ChatRepository:
         ]
         if not rows:
             return
-        self.connection.executemany(
-            """
-            INSERT INTO messages(thread_id, role, message_type, content, metadata_json)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            rows,
-        )
-        self.connection.execute(
-            """
-            UPDATE threads
-            SET updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-            """,
-            (thread_id,),
-        )
-        self.connection.commit()
+        with self.lock:
+            self.connection.executemany(
+                """
+                INSERT INTO messages(thread_id, role, message_type, content, metadata_json)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                rows,
+            )
+            self.connection.execute(
+                """
+                UPDATE threads
+                SET updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (thread_id,),
+            )
+            self.connection.commit()
 
     def list_messages(self, thread_id: str) -> list[Message]:
         thread_id = sanitize_text(thread_id)
-        rows = self.connection.execute(
-            """
-            SELECT role, content, message_type, metadata_json
-            FROM messages
-            WHERE thread_id = ?
-              AND role IN ('user', 'assistant')
-              AND message_type IN ('message', 'user_message', 'assistant_message')
-            ORDER BY id ASC
-            """,
-            (thread_id,),
-        ).fetchall()
+        with self.lock:
+            rows = self.connection.execute(
+                """
+                SELECT role, content, message_type, metadata_json
+                FROM messages
+                WHERE thread_id = ?
+                  AND role IN ('user', 'assistant')
+                  AND message_type IN ('message', 'user_message', 'assistant_message')
+                ORDER BY id ASC
+                """,
+                (thread_id,),
+            ).fetchall()
         return [
             Message(
                 role=sanitize_text(row["role"]),
@@ -124,23 +130,25 @@ class ChatRepository:
 
 
 class MemoryRepository:
-    def __init__(self, connection: sqlite3.Connection) -> None:
+    def __init__(self, connection: sqlite3.Connection, lock: RLock | None = None) -> None:
         self.connection = connection
+        self.lock = lock or RLock()
 
     def sync_directory(self, memory_dir: Path) -> None:
-        for path in sorted(memory_dir.rglob("*.md")):
-            title = path.stem.replace("_", " ").replace("-", " ").strip().title()
-            self.connection.execute(
-                """
-                INSERT INTO memory_entries(path, title, tags)
-                VALUES (?, ?, ?)
-                ON CONFLICT(path) DO UPDATE SET
-                    title = excluded.title,
-                    updated_at = CURRENT_TIMESTAMP
-                """,
-                (str(path), title, ""),
-            )
-        self.connection.commit()
+        with self.lock:
+            for path in sorted(memory_dir.rglob("*.md")):
+                title = path.stem.replace("_", " ").replace("-", " ").strip().title()
+                self.connection.execute(
+                    """
+                    INSERT INTO memory_entries(path, title, tags)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(path) DO UPDATE SET
+                        title = excluded.title,
+                        updated_at = CURRENT_TIMESTAMP
+                    """,
+                    (str(path), title, ""),
+                )
+            self.connection.commit()
 
 
 def _decode_metadata(metadata_json: str | None) -> dict[str, Any]:

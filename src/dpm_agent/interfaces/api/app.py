@@ -43,4 +43,14 @@ def create_app(service: AgentService | None = None) -> FastAPI:
     return app
 
 
+def main() -> None:
+    from dpm_agent.interfaces.api.server import main as run_server
+
+    run_server()
+
+
 app = create_app()
+
+
+if __name__ == "__main__":
+    main()

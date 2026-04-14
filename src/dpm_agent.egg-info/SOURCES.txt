@@ -29,8 +29,10 @@ src/dpm_agent/domain/__init__.py
 src/dpm_agent/domain/models.py
 src/dpm_agent/interfaces/__init__.py
 src/dpm_agent/interfaces/api/__init__.py
+src/dpm_agent/interfaces/api/__main__.py
 src/dpm_agent/interfaces/api/app.py
 src/dpm_agent/interfaces/api/schemas.py
+src/dpm_agent/interfaces/api/server.py
 src/dpm_agent/interfaces/api/sse.py
 src/dpm_agent/interfaces/cli/__init__.py
 src/dpm_agent/interfaces/cli/app.py

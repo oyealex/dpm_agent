@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterable
 from pathlib import Path
+from threading import RLock
 
 from dpm_agent.config import Settings
 from dpm_agent.core.agent import AgentRuntime
@@ -34,6 +35,7 @@ def build_service(
 
     connection = connect(settings.effective_db_path)
     initialize_database(connection)
+    database_lock = RLock()
 
     providers = tuple(tool_providers)
     if include_builtin_tools:
@@ -42,7 +44,7 @@ def build_service(
     runtime = AgentRuntime(settings=settings, tool_providers=providers)
     return AgentService(
         settings=settings,
-        chat_repository=ChatRepository(connection),
-        memory_repository=MemoryRepository(connection),
+        chat_repository=ChatRepository(connection, lock=database_lock),
+        memory_repository=MemoryRepository(connection, lock=database_lock),
         runtime=runtime,
     )
