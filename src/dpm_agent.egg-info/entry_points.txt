@@ -1,0 +1,2 @@
+[console_scripts]
+dpm-agent = dpm_agent.cli:main

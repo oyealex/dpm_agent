@@ -1,0 +1,34 @@
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+
+from dpm_agent.config import Settings
+from dpm_agent.db import connect, initialize_database
+from dpm_agent.repository import ChatRepository, MemoryRepository
+from dpm_agent.service import AgentService
+
+logger = logging.getLogger(__name__)
+
+
+def build_service(sessions_dir: Path | None = None) -> AgentService:
+    settings = Settings(sessions_dir=sessions_dir) if sessions_dir else Settings()
+    settings.ensure_directories()
+    settings.apply_provider_environment()
+    logger.info("Starting %s", settings.app_name)
+    logger.info("Model setting: %s", settings.model)
+    logger.info("Provider model name: %s", settings.effective_model_name)
+    logger.info("OpenAI API mode: chat_completions")
+    logger.info("OpenAI base URL: %s", settings.effective_openai_base_url)
+    logger.info("OpenAI API key configured: %s", "yes" if settings.has_openai_api_key else "no")
+    logger.info("SQLite DB path: %s", settings.effective_db_path)
+    logger.info("Sessions dir: %s", settings.effective_sessions_dir)
+
+    connection = connect(settings.effective_db_path)
+    initialize_database(connection)
+
+    return AgentService(
+        settings=settings,
+        chat_repository=ChatRepository(connection),
+        memory_repository=MemoryRepository(connection),
+    )

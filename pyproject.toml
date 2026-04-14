@@ -1,0 +1,32 @@
+[project]
+name = "dpm-agent"
+version = "0.1.0"
+description = "Personal DeepAgents application with skills, memory, and SQLite persistence."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "deepagents>=0.4.5",
+  "httpx[socks]>=0.28.0",
+  "langchain-openai>=0.3.0",
+  "pydantic>=2.7.0",
+  "pydantic-settings>=2.3.0",
+]
+
+[project.optional-dependencies]
+api = [
+  "fastapi>=0.115.0",
+  "uvicorn>=0.30.0",
+]
+
+[project.scripts]
+dpm-agent = "dpm_agent.cli:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
