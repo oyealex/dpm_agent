@@ -20,12 +20,12 @@
 
 当前代码位置：
 
-- `dpm_agent.interfaces.cli.parser`：命令行参数。
-- `dpm_agent.interfaces.cli.renderer`：终端事件渲染。
-- `dpm_agent.interfaces.cli.app`：CLI 交互流程。
-- `dpm_agent.interfaces.api.app`：FastAPI app、REST 与 SSE endpoint。
-- `dpm_agent.interfaces.api.sse`：SSE 事件编码。
-- `dpm_agent.interfaces.api.server`：Python 方式启动 API 服务，支持 host、port、reload 和 debug 配置。
+- `agents.interfaces.cli.parser`：命令行参数。
+- `agents.interfaces.cli.renderer`：终端事件渲染。
+- `agents.interfaces.cli.app`：CLI 交互流程。
+- `agents.interfaces.api.app`：FastAPI app、REST 与 SSE endpoint。
+- `agents.interfaces.api.sse`：SSE 事件编码。
+- `agents.interfaces.api.server`：Python 方式启动 API 服务，支持 host、port、reload 和 debug 配置。
 
 API 当前支持：
 
@@ -57,11 +57,11 @@ SSE 接口复用 `AgentService.chat_stream()`，因此与 CLI 使用同一套事
 
 的最佳位置。
 
-当前代码位置：`dpm_agent.core.service.AgentService`。
+当前代码位置：`agents.core.service.AgentService`。
 
 ### 3. Agent 运行层
 
-`dpm_agent.core.agent` 负责创建 DeepAgents 实例，并统一处理：
+`agents.core.agent` 负责创建 DeepAgents 实例，并统一处理：
 
 - 模型配置
 - 系统提示词
@@ -74,11 +74,11 @@ SSE 接口复用 `AgentService.chat_stream()`，因此与 CLI 使用同一套事
 
 当前代码位置：
 
-- `dpm_agent.core.agent.AgentRuntime`：创建每个 thread 的 DeepAgents runtime。
-- `dpm_agent.core.agent.build_agent`：封装 DeepAgents 初始化。
-- `dpm_agent.core.events`：将 DeepAgents/LangGraph 流输出归一为应用事件。
-- `dpm_agent.core.tools.AgentToolProvider`：自定义工具扩展点。后续可以把 DeepAgents 兼容工具注册到 provider，再由 `AgentRuntime` 注入。
-- `dpm_agent.tools.calculator.CalculatorToolProvider`：内置四则运算示例工具，展示自定义工具的接入方式。
+- `agents.core.agent.AgentRuntime`：创建每个 thread 的 DeepAgents runtime。
+- `agents.core.agent.build_agent`：封装 DeepAgents 初始化。
+- `agents.core.events`：将 DeepAgents/LangGraph 流输出归一为应用事件。
+- `agents.core.tools.AgentToolProvider`：自定义工具扩展点。后续可以把 DeepAgents 兼容工具注册到 provider，再由 `AgentRuntime` 注入。
+- `agents.tools.calculator.CalculatorToolProvider`：内置四则运算示例工具，展示自定义工具的接入方式。
 
 ## Tool 扩展方式
 
@@ -86,17 +86,17 @@ SSE 接口复用 `AgentService.chat_stream()`，因此与 CLI 使用同一套事
 
 1. 用 `langchain_core.tools.tool` 或 DeepAgents 支持的工具格式定义工具。
 2. 实现 `AgentToolProvider.tools_for_thread(thread_id)`，按会话返回可用工具。
-3. 通过 `build_service(tool_providers=(MyToolProvider(),))` 注入，或加入 `dpm_agent.tools.default_tool_providers()` 作为默认内置工具。
+3. 通过 `build_service(tool_providers=(MyToolProvider(),))` 注入，或加入 `agents.tools.default_tool_providers()` 作为默认内置工具。
 
 当前示例：
 
-- `dpm_agent.tools.calculator.calculator_tool`
+- `agents.tools.calculator.calculator_tool`
 - 支持 `add`、`subtract`、`multiply`、`divide`
 - 除零时返回错误文本而不是让工具调用崩溃
 
 ### 4. 配置层
 
-配置统一集中在 `dpm_agent.config.Settings`，来源包括当前环境变量和项目根目录 `.env` 文件。统一使用 `AGENT_` 前缀，不再提供额外 fallback 变量。
+配置统一集中在 `agents.config.Settings`，来源包括当前环境变量和项目根目录 `.env` 文件。统一使用 `AGENT_` 前缀，不再提供额外 fallback 变量。
 
 主要配置范围：
 
@@ -126,10 +126,10 @@ SQLite connection 使用 `check_same_thread=False`，并由 `ChatRepository` 与
 
 当前代码位置：
 
-- `dpm_agent.storage.db`：SQLite/PostgreSQL schema、连接工厂、统一 `Database` 包装和轻量迁移。
-- `dpm_agent.storage.repository`：`ChatRepository` 与 `MemoryRepository`。
+- `agents.storage.db`：SQLite/PostgreSQL schema、连接工厂、统一 `Database` 包装和轻量迁移。
+- `agents.storage.repository`：`ChatRepository` 与 `MemoryRepository`。
 
-顶层的 `dpm_agent.db`、`dpm_agent.repository`、`dpm_agent.service`、`dpm_agent.agent_factory`、`dpm_agent.api` 和 `dpm_agent.cli` 仅作为兼容导出保留，新代码应优先使用子包路径。
+顶层的 `agents.db`、`agents.repository`、`agents.service`、`agents.agent_factory`、`agents.api` 和 `agents.cli` 仅作为兼容导出保留，新代码应优先使用子包路径。
 
 为什么不只依赖 DeepAgents / LangGraph 内部状态：
 

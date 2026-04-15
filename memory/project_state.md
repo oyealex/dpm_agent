@@ -9,7 +9,7 @@
 - `tools/calculator.py` 提供四则运算自定义工具示例，默认通过 `default_tool_providers()` 注入 Agent runtime。
 - CLI 代码已拆到 `interfaces/cli/`，参数解析、交互流程和终端渲染相互解耦。
 - REST API 代码已拆到 `interfaces/api/`，支持同步 `POST /chat` 和 SSE 流式 `POST /chat/stream`。
-- API 服务可通过 `uvicorn dpm_agent.interfaces.api:app`、`python -m dpm_agent.interfaces.api` 或安装后的 `dpm-agent-api` 命令启动。
+- API 服务可通过 `uvicorn agents.interfaces.api:app`、`python -m agents.interfaces.api` 或安装后的 `dpm-agent-api` 命令启动。
 - SQLite connection 已配置 `check_same_thread=False`，并由 `ChatRepository` 与 `MemoryRepository` 共享同一把 `RLock` 串行化访问，避免 FastAPI/Starlette 线程池执行同步 SSE generator 时触发跨线程 SQLite 错误。
 - API SSE 响应与 CLI 一样不返回 `internal_state` 事件，只返回面向调用方可展示的 Agent 过程事件。
 - 存储层已支持 SQLite/PostgreSQL 后端切换。默认 SQLite；设置 `DPM_AGENT_STORAGE_BACKEND=postgres` 并提供 `DPM_AGENT_POSTGRES_DSN` 或 `DPM_AGENT_DATABASE_URL` 可切换到 PostgreSQL；若直接设置 `DPM_AGENT_DATABASE_URL` 或通用 `DATABASE_URL` 且未指定 backend，会自动推断为 PostgreSQL。PostgreSQL 依赖为可选 extra：`pip install -e ".[postgres]"`。
@@ -34,7 +34,7 @@
 
 - 最近一轮围绕 API 与可部署性完成增强：
   - `POST /chat/stream` SSE 保持与 CLI 同源事件流，但 API 侧过滤 `internal_state`。
-  - API 服务支持 `python -m dpm_agent.interfaces.api`、`python -m dpm_agent.api` 和 `dpm-agent-api` 启动。
+  - API 服务支持 `python -m agents.interfaces.api`、`python -m agents.api` 和 `dpm-agent-api` 启动。
   - 修复 FastAPI/Starlette 线程池迭代 SSE generator 时的 SQLite 跨线程访问错误。
   - 存储层新增 PostgreSQL 后端，默认保留 SQLite，并通过环境变量/`.env` 切换。
   - 所有主要配置集中到 `Settings`：LLM、system prompt、debug、存储、sessions、API host/port/reload、CORS。
@@ -67,7 +67,7 @@
 
 ## 验证状态
 
-- 已用 `.venv/bin/python` 对 `src/dpm_agent` 下 Python 文件做 AST 解析验证。
+- 已用 `.venv/bin/python` 对 `src/agents` 下 Python 文件做 AST 解析验证。
 - 已用 `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src` 验证 calculator 的加、减、乘、除和除零错误路径。
 - 已验证 `default_tool_providers()` 返回内置 provider。
 - 已验证 API Python 入口的 `--help`，环境变量可注入 API host/port/reload/debug 默认值。
@@ -81,8 +81,8 @@
 
 - 下一步可以增加一个正式的 Agent 定义层，例如 `agents/` 或 `profiles/`，让不同 Agent 声明 system prompt、默认 skills、memory 策略和 tool providers。
 - 给 `calculator_tool` 增加单元测试，并为 `AgentToolProvider` 的组合逻辑增加测试。
-- 在具备真实 provider 与 PostgreSQL 的环境里，验证 `dpm-agent`、`uvicorn dpm_agent.interfaces.api:app --reload`、`python -m dpm_agent.interfaces.api`、SSE 流和 PostgreSQL 持久化。
-- 后续如果继续跟踪 `src/dpm_agent.egg-info`，每次 README/依赖/包文件变化后都需要同步；更推荐后续将 egg-info 从版本控制中移除。
+- 在具备真实 provider 与 PostgreSQL 的环境里，验证 `dpm-agent`、`uvicorn agents.interfaces.api:app --reload`、`python -m agents.interfaces.api`、SSE 流和 PostgreSQL 持久化。
+- 后续如果继续跟踪 `src/agents.egg-info`，每次 README/依赖/包文件变化后都需要同步；更推荐后续将 egg-info 从版本控制中移除。
 
 ## 模型与接口
 
