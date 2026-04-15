@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import re
 
@@ -33,6 +34,7 @@ class Settings(BaseSettings):
     cors_allow_credentials: bool = False
     cors_allow_methods: str = "*"
     cors_allow_headers: str = "*"
+    custom_env_prefixes: str = "AGENT_CUSTOM_,AGENT_AGENT_,AGENT_TOOL_"
 
     def ensure_directories(self) -> None:
         if self.effective_storage_backend == "sqlite":
@@ -87,6 +89,51 @@ class Settings(BaseSettings):
     @property
     def effective_sessions_dir(self) -> Path:
         return self.sessions_dir.expanduser().resolve()
+
+    @property
+    def effective_custom_env_prefixes(self) -> list[str]:
+        prefixes = _split_csv(self.custom_env_prefixes)
+        cleaned: list[str] = []
+        for prefix in prefixes:
+            normalized = prefix.strip()
+            if not normalized:
+                continue
+            if not normalized.endswith("_"):
+                normalized = f"{normalized}_"
+            cleaned.append(normalized.upper())
+        return cleaned
+
+    @property
+    def effective_custom_env(self) -> dict[str, str]:
+        return self.collect_custom_env()
+
+    @property
+    def effective_custom_agent_env(self) -> dict[str, str]:
+        return self.collect_custom_env(prefixes=("AGENT_AGENT_",))
+
+    @property
+    def effective_custom_tool_env(self) -> dict[str, str]:
+        return self.collect_custom_env(prefixes=("AGENT_TOOL_",))
+
+    def collect_custom_env(self, prefixes: tuple[str, ...] | None = None) -> dict[str, str]:
+        active_prefixes = (
+            tuple(prefix.upper() for prefix in prefixes)
+            if prefixes is not None
+            else tuple(self.effective_custom_env_prefixes)
+        )
+        if not active_prefixes:
+            return {}
+        known_setting_env_keys = {
+            f"AGENT_{name}".upper() for name in self.model_fields if name != "custom_env_prefixes"
+        }
+        custom_env: dict[str, str] = {}
+        for key, value in os.environ.items():
+            upper_key = key.upper()
+            if upper_key in known_setting_env_keys:
+                continue
+            if any(upper_key.startswith(prefix) for prefix in active_prefixes):
+                custom_env[upper_key] = sanitize_text(value)
+        return custom_env
 
     def effective_session_dir(self, thread_id: str) -> Path:
         return (self.effective_sessions_dir / _safe_session_id(thread_id)).resolve()

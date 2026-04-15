@@ -106,6 +106,7 @@ SSE 接口复用 `AgentService.chat_stream()`，因此与 CLI 使用同一套事
 - 会话文件：`AGENT_SESSIONS_DIR`
 - API：`AGENT_API_HOST`、`AGENT_API_PORT`、`AGENT_API_RELOAD`
 - CORS：`AGENT_CORS_ORIGINS`、`AGENT_CORS_ALLOW_CREDENTIALS`、`AGENT_CORS_ALLOW_METHODS`、`AGENT_CORS_ALLOW_HEADERS`
+- 自定义扩展：`AGENT_CUSTOM_ENV_PREFIXES`（默认 `AGENT_CUSTOM_,AGENT_AGENT_,AGENT_TOOL_`），可收集匹配前缀的环境变量供自定义 Agent/Tool 使用
 
 CLI/API 的命令行参数仍可覆盖对应环境变量，例如 `--sessions-dir`、`--host`、`--port`、`--reload`、`--debug`。
 
