@@ -1,4 +1,4 @@
-# DPM Agent
+# Agents
 
 一个基于 `DeepAgents` 的个人 Agent 骨架，目标是支持：
 
@@ -28,7 +28,7 @@
 - `src/agents/application/bootstrap.py`
   - 应用装配入口，连接配置、数据库、repository、runtime 和 service
 - `src/agents/*.py`
-  - 顶层兼容模块，保留旧导入路径和 `dpm-agent` 命令入口
+  - 顶层兼容模块，保留旧导入路径和 `agents` 命令入口
 - `memory/`
   - 默认位于 `data/sessions/<session-id>/memory/`，以文件形式维护该会话的长期记忆，作为 agent 启动时的注入上下文
 - `skills/`
@@ -66,7 +66,7 @@ export AGENT_MODEL="openai:gpt-4.1"
 
 | 环境变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `AGENT_APP_NAME` | `dpm-agent` | 应用名称，主要用于日志。 |
+| `AGENT_APP_NAME` | `agents` | 应用名称，主要用于日志。 |
 | `AGENT_DEBUG` | `false` | 开启 debug 日志；CLI/API 的 `--debug` / `--no-debug` 可覆盖。 |
 | `AGENT_MODEL` | `openai:gpt-4.1` | LLM 模型。`openai:<model>` 会在请求 provider 时去掉 `openai:` 前缀。 |
 | `AGENT_OPENAI_API_KEY` | 空 | OpenAI-compatible API key。 |
@@ -151,27 +151,34 @@ data/
 启动连续对话：
 
 ```bash
-dpm-agent
+agents
+```
+
+指定 Agent 启动：
+
+```bash
+agents db_explorer
+agents db_explorer chat --thread-id work
 ```
 
 开启一个随机 ID 的新会话：
 
 ```bash
-dpm-agent --new
-dpm-agent chat --new
+agents --new
+agents chat --new
 ```
 
 指定 sessions 目录：
 
 ```bash
-dpm-agent --sessions-dir ./data/sessions
-dpm-agent chat --sessions-dir ./data/sessions --thread-id work
+agents --sessions-dir ./data/sessions
+agents chat --sessions-dir ./data/sessions --thread-id work
 ```
 
 默认不会显示中间请求日志，只显示交互内容。需要调试时可以启动时打开：
 
 ```bash
-dpm-agent --debug
+agents --debug
 ```
 
 也可以在交互模式中动态开关：
@@ -194,7 +201,7 @@ dpm-agent --debug
 指定会话 ID 启动连续对话：
 
 ```bash
-dpm-agent chat --thread-id work
+agents chat --thread-id work
 ```
 
 交互模式中输入 `/exit` 或 `/quit` 退出。同一个 `thread_id` 的历史会自动从 SQLite 读取并继续。使用 `--new` 会生成随机 `thread_id`，因此会进入一个全新的 `data/sessions/<session-id>/` 目录。
@@ -202,8 +209,8 @@ dpm-agent chat --thread-id work
 也可以发送单条消息后退出：
 
 ```bash
-dpm-agent chat --thread-id demo --message "帮我整理今天的任务"
-dpm-agent chat --new --message "帮我整理今天的任务"
+agents chat --thread-id demo --message "帮我整理今天的任务"
+agents chat --new --message "帮我整理今天的任务"
 ```
 
 首次运行会自动创建 SQLite 表。
@@ -221,7 +228,7 @@ CLI 会区分显示用户输入、Agent 流式输出、思考/步骤、工具调
    - `AGENT_OPENAI_BASE_URL=https://<your-endpoint>/v1`
    - `AGENT_MODEL=openai:gpt-4.1`
 6. `Parameters` 可选：
-   - 连续对话：留空（等价 `dpm-agent`）
+   - 连续对话：留空（等价 `agents`）
    - 新会话：`--new`
    - 单条消息：`chat --thread-id demo --message "你好"`
 
@@ -287,7 +294,7 @@ python -m agents.interfaces.api --host 127.0.0.1 --port 8000
 安装为可执行命令后也支持：
 
 ```bash
-dpm-agent-api --host 127.0.0.1 --port 8000
+agents-api --host 127.0.0.1 --port 8000
 ```
 
 ### 在 PyCharm 中启动 API

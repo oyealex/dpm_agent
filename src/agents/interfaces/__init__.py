@@ -1,1 +1,1 @@
-"""Transport adapters for DPM Agent."""
+"""Transport adapters for Agents."""

@@ -4,6 +4,7 @@ import argparse
 import importlib.util
 
 from agents.config import Settings
+from agents.core.agent import DEFAULT_AGENT_REGISTRY
 
 
 INSTALL_API_MESSAGE = (
@@ -14,7 +15,7 @@ INSTALL_API_MESSAGE = (
 
 def build_parser(settings: Settings | None = None) -> argparse.ArgumentParser:
     settings = settings or Settings()
-    parser = argparse.ArgumentParser(description="DPM Agent API server")
+    parser = argparse.ArgumentParser(description="Agents API server")
     parser.add_argument(
         "--host",
         default=settings.api_host,
@@ -38,6 +39,11 @@ def build_parser(settings: Settings | None = None) -> argparse.ArgumentParser:
         default=settings.debug,
         help=f"Enable debug logging, defaults to {settings.debug}.",
     )
+    parser.add_argument(
+        "--agent",
+        default="default",
+        help="Agent profile to serve, defaults to 'default'.",
+    )
     return parser
 
 
@@ -54,8 +60,14 @@ def main() -> None:
     except ImportError as exc:
         raise SystemExit(INSTALL_API_MESSAGE) from exc
 
+    if args.agent not in DEFAULT_AGENT_REGISTRY.list_names():
+        options = ", ".join(DEFAULT_AGENT_REGISTRY.list_names())
+        raise SystemExit(f"Unknown agent '{args.agent}'. Available: {options}")
+
+    from agents.interfaces.api.app import create_app
+
     uvicorn.run(
-        "agents.interfaces.api:app",
+        create_app(agent_name=args.agent),
         host=args.host,
         port=args.port,
         reload=args.reload,
