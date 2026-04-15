@@ -22,6 +22,7 @@ src/agents/application/__init__.py
 src/agents/application/bootstrap.py
 src/agents/core/__init__.py
 src/agents/core/agent.py
+src/agents/core/definitions.py
 src/agents/core/events.py
 src/agents/core/service.py
 src/agents/core/tools.py

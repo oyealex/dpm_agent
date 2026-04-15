@@ -10,7 +10,7 @@ from agents.interfaces.cli.parser import build_parser
 from agents.interfaces.cli.renderer import color, render_stream
 from agents.logging import configure_logging, set_logging_verbose
 from agents.application.bootstrap import build_service
-from agents.core.agent import DEFAULT_AGENT_REGISTRY
+from agents.core.definitions import AgentConfigError, load_agent_registry
 from agents.sanitize import sanitize_text
 
 
@@ -20,11 +20,17 @@ def main() -> None:
     _normalize_args(args)
     settings = Settings()
     configure_logging(verbose=settings.debug if args.debug is None else args.debug)
-    _validate_agent_name(args.agent_name)
+    registry = _load_registry(args.agent_config)
+    _validate_agent_name(args.agent_name, registry.list_names())
 
     if args.command == "chat":
         thread_id = _resolve_thread_id(args)
-        service = build_service(sessions_dir=args.sessions_dir, agent_name=args.agent_name)
+        service = build_service(
+            sessions_dir=args.sessions_dir,
+            agent_config_path=args.agent_config,
+            agent_registry=registry,
+            agent_name=args.agent_name,
+        )
         if args.message:
             args.message = sanitize_text(args.message)
             print(color(f"You> {args.message}", "user"))
@@ -36,8 +42,14 @@ def main() -> None:
 
 
 
-def _validate_agent_name(agent_name: str) -> None:
-    available = DEFAULT_AGENT_REGISTRY.list_names()
+def _load_registry(agent_config_path):
+    try:
+        return load_agent_registry(agent_config_path)
+    except AgentConfigError as exc:
+        raise SystemExit(str(exc)) from exc
+
+
+def _validate_agent_name(agent_name: str, available: tuple[str, ...]) -> None:
     if agent_name not in available:
         options = ", ".join(available)
         raise SystemExit(f"Unknown agent '{agent_name}'. Available: {options}")

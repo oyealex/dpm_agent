@@ -32,8 +32,10 @@ API 当前支持：
 - `GET /healthz`：健康检查。
 - `POST /chat`：同步对话，返回最终回复。
 - `POST /chat/stream`：SSE 流式对话，逐条返回面向调用方可展示的 `AgentEvent`。
+- `POST /agents/{agent_name}/chat`：按 URL 中的 Agent 名称同步对话。
+- `POST /agents/{agent_name}/chat/stream`：按 URL 中的 Agent 名称 SSE 流式对话。
 
-SSE 接口复用 `AgentService.chat_stream()`，因此与 CLI 使用同一套事件归一化逻辑。API 会过滤 `internal_state`，不会把 DeepAgents/LangGraph 的内部状态同步事件暴露给前端。跨域访问通过 FastAPI `CORSMiddleware` 实现，只有设置 `AGENT_CORS_ORIGINS` 后才启用 CORS。
+SSE 接口复用 `AgentService.chat_stream()`，因此与 CLI 使用同一套事件归一化逻辑。API 会过滤 `internal_state`，不会把 DeepAgents/LangGraph 的内部状态同步事件暴露给前端。API 启动时加载完整 Agent registry，请求体不支持切换 Agent；旧 `/chat` 与 `/chat/stream` 使用启动参数中的默认 Agent，新 `/agents/{agent_name}/...` 路由通过 URL 选择 Agent。跨域访问通过 FastAPI `CORSMiddleware` 实现，只有设置 `AGENT_CORS_ORIGINS` 后才启用 CORS。
 
 ### 2. 应用服务层
 
@@ -69,6 +71,7 @@ SSE 接口复用 `AgentService.chat_stream()`，因此与 CLI 使用同一套事
 - memory 文件列表
 - 受限 session backend，并按 `thread_id` 使用 `data/sessions/<session-id>` 隔离文件工具、skills 和 memory
 - 线程 ID 透传
+- 配置化 Agent 的 Tool Provider、SubAgent 和 DeepAgents 额外参数
 
 这里建议把 DeepAgents 当成“可替换引擎”，不要让 SQLite 或产品逻辑反向污染它。
 
@@ -76,6 +79,7 @@ SSE 接口复用 `AgentService.chat_stream()`，因此与 CLI 使用同一套事
 
 - `agents.core.agent.AgentRuntime`：创建每个 thread 的 DeepAgents runtime。
 - `agents.core.agent.build_agent`：封装 DeepAgents 初始化。
+- `agents.core.definitions`：`agents.yaml` 配置模型、环境变量注入、引用校验、Tool Provider 实例化和 Agent registry 合并。
 - `agents.core.events`：将 DeepAgents/LangGraph 流输出归一为应用事件。
 - `agents.core.tools.AgentToolProvider`：自定义工具扩展点。后续可以把 DeepAgents 兼容工具注册到 provider，再由 `AgentRuntime` 注入。
 - `agents.tools.calculator.CalculatorToolProvider`：内置四则运算示例工具，展示自定义工具的接入方式。
@@ -109,6 +113,30 @@ SSE 接口复用 `AgentService.chat_stream()`，因此与 CLI 使用同一套事
 - 自定义扩展：`AGENT_CUSTOM_ENV_PREFIXES`（默认 `AGENT_CUSTOM_,AGENT_AGENT_,AGENT_TOOL_`），可收集匹配前缀的环境变量供自定义 Agent/Tool 使用
 
 CLI/API 的命令行参数仍可覆盖对应环境变量，例如 `--sessions-dir`、`--host`、`--port`、`--reload`、`--debug`。
+
+#### 配置化 Agent registry
+
+Agent 定义默认从当前工作目录的 `agents.yaml` 加载；如果文件不存在，使用内置 `DEFAULT_AGENT_REGISTRY`。CLI/API 也支持通过 `--agent-config` 指定其他 YAML 文件；显式指定文件不存在时启动失败。
+
+YAML 顶层固定为三段：
+
+```yaml
+llms: []
+tools: []
+agents: []
+```
+
+- `llms` 定义 LLM 资源：唯一名称、DeepAgents provider 格式模型名、API Key、BaseUrl 和额外调用参数。
+- `tools` 定义 Tool Provider：唯一名称、Provider 类路径和结构化配置。
+- `agents` 定义 Agent：唯一名称、引用的 LLM、引用的 Tool 列表、系统提示词、skills/memory 策略、SubAgent 名称列表、默认工具开关和 DeepAgents 额外参数。
+
+环境变量注入采用显式语法：`${VAR}` 或 `${VAR:-default}`。LLM 的 `model`、`api_key`、`base_url` 以及 Tool `config` 中的字符串值支持这种语法。API Key 允许明文配置，但日志、错误信息、CLI 输出、API 响应和 SSE 事件流不得输出 secret 明文。
+
+系统提示词可用 `system_prompt` 内联，也可用 `system_prompt_file` 引用外部 UTF-8 文件；二者不能同时设置。相对路径按 YAML 文件所在目录解析，绝对路径按原路径解析。
+
+`skills` 和 `memory` 支持布尔值或 `{ enabled, paths }` 对象。启用但未指定 `paths` 时加载当前 session 默认目录；指定额外路径时，运行时会把这些只读来源镜像到当前 session 的 `.configured/` 目录，再交给 DeepAgents 的 `FilesystemBackend` 使用。这样不会扩大文件工具的可写根目录。
+
+YAML 中的同名 Agent 会覆盖内置同名 Agent。SubAgent 只通过已配置 Agent 名称引用，loader 会校验引用存在并拒绝直接或间接循环引用。
 
 ### 5. 持久化层
 

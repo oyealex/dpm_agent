@@ -38,6 +38,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Directory for per-session files, skills, and memory. Defaults to ./data/sessions.",
     )
     parser.add_argument(
+        "--agent-config",
+        type=Path,
+        default=None,
+        help="Path to agents.yaml. Defaults to ./agents.yaml when it exists.",
+    )
+    parser.add_argument(
         "--debug",
         action=argparse.BooleanOptionalAction,
         default=None,

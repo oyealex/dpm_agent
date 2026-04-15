@@ -6,7 +6,8 @@ from pathlib import Path
 from threading import RLock
 
 from agents.config import Settings
-from agents.core.agent import DEFAULT_AGENT_REGISTRY, AgentRuntime
+from agents.core.agent import AgentRuntime
+from agents.core.definitions import AgentConfigError, AgentRegistry, load_agent_registry, mask_secrets
 from agents.core.service import AgentService
 from agents.core.tools import AgentToolProvider
 from agents.storage.db import connect_database, initialize_database
@@ -18,6 +19,8 @@ logger = logging.getLogger(__name__)
 
 def build_service(
     sessions_dir: Path | None = None,
+    agent_config_path: Path | None = None,
+    agent_registry: AgentRegistry | None = None,
     tool_providers: Iterable[AgentToolProvider] = (),
     include_builtin_tools: bool = True,
     agent_name: str = "default",
@@ -28,7 +31,7 @@ def build_service(
     logger.info("Model setting: %s", settings.model)
     logger.info("Provider model name: %s", settings.effective_model_name)
     logger.info("OpenAI API mode: chat_completions")
-    logger.info("OpenAI base URL: %s", settings.effective_openai_base_url)
+    logger.info("OpenAI base URL: %s", mask_secrets(settings.effective_openai_base_url))
     logger.info("OpenAI API key configured: %s", "yes" if settings.has_openai_api_key else "no")
     logger.info("Storage backend: %s", settings.effective_storage_backend)
     if settings.effective_storage_backend == "sqlite":
@@ -45,13 +48,22 @@ def build_service(
     initialize_database(database)
     database_lock = RLock()
 
-    definition = DEFAULT_AGENT_REGISTRY.get(agent_name)
+    try:
+        registry = agent_registry or load_agent_registry(agent_config_path)
+        definition = registry.get(agent_name)
+    except (AgentConfigError, ValueError) as exc:
+        raise ValueError(str(exc)) from exc
 
     providers = (*definition.tool_providers, *tuple(tool_providers))
     if include_builtin_tools and definition.include_builtin_tools:
         providers = (*default_tool_providers(), *providers)
 
-    runtime = AgentRuntime(settings=settings, definition=definition, tool_providers=providers)
+    runtime = AgentRuntime(
+        settings=settings,
+        definition=definition,
+        registry=registry,
+        tool_providers=providers,
+    )
     return AgentService(
         settings=settings,
         chat_repository=ChatRepository(database, lock=database_lock),

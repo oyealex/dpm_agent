@@ -1,0 +1,21 @@
+llms:
+    - name: qwen3.6-plus
+      model: qwen3.6-plus
+      api_key: ${API_KEY}
+      base_url: https://coding.dashscope.aliyuncs.com/v1
+
+tools:
+    - name: calculator
+      provider: agents.tools.calculator.CalculatorToolProvider
+      config: {}
+
+agents:
+    - name: default
+      llm: qwen3.6-plus
+      tools:
+          - calculator
+      system_prompt: |
+          所有的回复末尾都必须加上🆗表情。
+      include_builtin_tools: true
+      skills: true
+      memory: true

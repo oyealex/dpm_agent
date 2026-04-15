@@ -10,7 +10,9 @@
 ## 架构概览
 
 - `src/agents/core/`
-  - Agent 运行核心，负责创建 DeepAgents runtime、装配模型、skills、memory、session 文件 backend 和工具提供器
+  - Agent 运行核心，负责创建 DeepAgents runtime、装配模型、skills、memory、session 文件 backend、工具提供器和配置化 Agent 定义
+- `src/agents/core/definitions.py`
+  - `agents.yaml` 配置模型、环境变量注入、引用校验和 Agent registry loader
 - `src/agents/core/service.py`
   - 应用服务层，编排一次对话请求：加载历史、调用 agent、归一化事件、写入 SQLite
 - `src/agents/core/events.py`
@@ -159,6 +161,7 @@ agents
 ```bash
 agents db_explorer
 agents db_explorer chat --thread-id work
+agents research_assistant --agent-config ./agents.yaml
 ```
 
 开启一个随机 ID 的新会话：
@@ -217,13 +220,95 @@ agents chat --new --message "帮我整理今天的任务"
 
 CLI 会区分显示用户输入、Agent 流式输出、思考/步骤、工具调用和工具结果。SQLite 的 `messages` 表会通过 `message_type` 和 `metadata_json` 保存这些不同类型的事件；普通历史续聊只会把用户消息和最终助手消息重新送入模型上下文。
 
-## 自定义 Agent（详细示例）
+## 配置化 Agent
 
-下面给一个完整示例：新增一个 `research_assistant` Agent，包含自定义系统提示词、工具 provider、可选 subagent，并演示如何启动。
+启动时默认读取当前目录下的 `agents.yaml`。如果这个文件不存在，系统使用内置 `default` 和 `db_explorer`。也可以通过 `--agent-config` 指定其他配置文件；显式指定的文件不存在时会启动失败。
 
-### 1) 定义一个自定义 Tool Provider（可复用）
+YAML 顶层固定为三段：
 
-例如新增文件：`src/agents/tools/research.py`
+```yaml
+llms:
+  - name: main
+    model: ${AGENT_MODEL:-openai:gpt-4.1}
+    api_key: ${AGENT_OPENAI_API_KEY}
+    base_url: ${AGENT_OPENAI_BASE_URL:-https://api.openai.com/v1}
+
+tools:
+  - name: calculator
+    provider: agents.tools.calculator.CalculatorToolProvider
+    config: {}
+
+agents:
+  - name: helper
+    llm: main
+    tools: [calculator]
+    system_prompt_file: ./prompts/helper.md
+    skills: false
+    memory: false
+
+  - name: research_assistant
+    llm: main
+    tools: [calculator]
+    system_prompt: |
+      你是研究助理 Agent。先澄清问题，再给出结构化结论。
+    include_builtin_tools: true
+    skills:
+      enabled: true
+      paths:
+        - ./skills/common
+    memory:
+      enabled: true
+      paths:
+        - ./memory/project.md
+    subagents: [helper]
+    create_kwargs:
+      debug: false
+```
+
+配置规则：
+
+- `llms` 定义 LLM 资源，`model` 保持 DeepAgents 的 `provider:model` 格式；当前 OpenAI-compatible 路径仍强制使用 Chat Completions。
+- `model`、`api_key`、`base_url` 支持 `${VAR}` 和 `${VAR:-default}` 环境变量引用。
+- `tools` 定义 Tool Provider，`provider` 是完整类路径，`config` 会作为关键字参数传给 provider 构造函数；`config` 内字符串也支持环境变量引用。
+- `agents` 定义命名 Agent，`llm`、`tools`、`subagents` 都通过名称引用前面已配置的资源。
+- `system_prompt` 可直接写在 YAML 中；`system_prompt_file` 可引用外部 UTF-8 文件。二者不能同时配置。相对路径按配置文件所在目录解析，绝对路径按原路径解析。
+- `skills` 和 `memory` 可写布尔值，也可写 `{ enabled, paths }`。启用但不写 `paths` 时使用当前 session 默认目录；写了 `paths` 时会额外加载这些路径。
+- YAML 中的同名 Agent 会覆盖内置同名 Agent。
+- API Key 允许明文配置，但日志、错误信息、CLI 输出、API 响应和 SSE 事件流都不会输出 secret 明文。
+
+### 启动配置化 Agent
+
+#### CLI 启动
+
+```bash
+agents research_assistant --agent-config ./agents.yaml
+agents research_assistant chat --thread-id research-demo --agent-config ./agents.yaml
+agents research_assistant chat --thread-id research-demo --message "帮我调研一下向量数据库选型" --agent-config ./agents.yaml
+```
+
+CLI 启动后不支持切换 Agent。要使用另一个 Agent，需要重新启动命令。
+
+#### API 启动
+
+```bash
+agents-api --agent default --agent-config ./agents.yaml --host 127.0.0.1 --port 8000
+python -m agents.interfaces.api --agent default --agent-config ./agents.yaml --host 127.0.0.1 --port 8000
+```
+
+API 启动时加载完整 registry。旧路由仍使用启动参数中的默认 Agent，新路由通过 URL 选择 Agent：
+
+```text
+POST /chat
+POST /chat/stream
+POST /agents/{agent_name}/chat
+POST /agents/{agent_name}/chat/stream
+```
+
+请求体不支持切换 Agent。
+
+### 自定义 Tool Provider
+
+例如新增文件 `src/agents/tools/research.py`：
 
 ```python
 from __future__ import annotations
@@ -242,91 +327,24 @@ def web_search(query: str) -> str:
 
 
 class ResearchToolProvider:
+    def __init__(self, timeout: int = 15) -> None:
+        self.timeout = timeout
+
     def tools_for_thread(self, thread_id: str) -> Iterable[Any]:
         return (web_search,)
 ```
 
-### 2) 在 `DEFAULT_AGENT_REGISTRY` 中注册自定义 Agent
+然后在 `agents.yaml` 中引用：
 
-编辑 `src/agents/core/agent.py`，在 `DEFAULT_AGENT_REGISTRY` 里增加一个 `AgentDefinition`：
-
-```python
-from agents.tools.research import ResearchToolProvider
-
-DEFAULT_AGENT_REGISTRY = AgentRegistry(
-    (
-        AgentDefinition(name="default", system_prompt=DEFAULT_SYSTEM_PROMPT),
-        AgentDefinition(
-            name="db_explorer",
-            system_prompt=(
-                "你是一个数据库探索 Agent。优先通过工具查看 schema 和数据，再给出结论；避免假设不存在的表结构。"
-            ),
-        ),
-        AgentDefinition(
-            name="research_assistant",
-            system_prompt=(
-                "你是研究助理 Agent。先检索信息，再给出结构化结论与引用建议。"
-            ),
-            include_memory=True,
-            include_skills=True,
-            include_builtin_tools=True,
-            tool_providers=(ResearchToolProvider(),),
-            # 如果你有 subagent，可在这里注入；没有可省略
-            subagents=(),
-            create_kwargs={},
-        ),
-    )
-)
+```yaml
+tools:
+  - name: research
+    provider: agents.tools.research.ResearchToolProvider
+    config:
+      timeout: ${AGENT_TOOL_SEARCH_TIMEOUT:-15}
 ```
 
-`AgentDefinition` 常用字段说明：
-
-- `name`：Agent 唯一名字（CLI/API 启动参数用这个）。
-- `system_prompt`：该 Agent 的系统提示词。
-- `include_memory` / `include_skills`：是否自动注入 session 下 `memory/`、`skills/`。
-- `include_builtin_tools`：是否保留内置工具（例如 calculator）。
-- `tool_providers`：该 Agent 专属工具 provider。
-- `subagents`：传给 `create_deep_agent` 的子 Agent 列表（按你的 DeepAgents 用法填充）。
-- `create_kwargs`：透传给 `create_deep_agent` 的额外参数。
-
-### 3) 启动自定义 Agent
-
-#### CLI 启动
-
-```bash
-# 交互式
-agents research_assistant
-
-# 指定 thread_id
-agents research_assistant chat --thread-id research-demo
-
-# 单轮对话
-agents research_assistant chat --thread-id research-demo --message "帮我调研一下向量数据库选型"
-```
-
-#### API 启动
-
-```bash
-agents-api --agent research_assistant --host 127.0.0.1 --port 8000
-```
-
-或：
-
-```bash
-python -m agents.interfaces.api --agent research_assistant --host 127.0.0.1 --port 8000
-```
-
-### 4) 在代码中按 Agent 名称装配 Service
-
-```python
-from agents.application.bootstrap import build_service
-
-service = build_service(agent_name="research_assistant")
-result = service.chat(thread_id="demo", message="给我一个调研计划")
-print(result.reply)
-```
-
-> 提示：如果你启动时出现 `Unknown agent 'xxx'`，说明该名称还未注册到 `DEFAULT_AGENT_REGISTRY`。
+> 提示：如果你启动时出现 `Unknown agent 'xxx'`，说明该名称没有出现在内置 registry 或当前加载的 `agents.yaml` 中。
 
 ### 在 PyCharm 中启动 CLI
 
@@ -342,6 +360,7 @@ print(result.reply)
    - 连续对话：留空（等价 `agents`）
    - 新会话：`--new`
    - 单条消息：`chat --thread-id demo --message "你好"`
+   - 指定配置：`research_assistant --agent-config ./agents.yaml`
 
 ## 自定义 Tool 示例
 
@@ -400,12 +419,14 @@ uvicorn agents.interfaces.api:app --reload
 
 ```bash
 python -m agents.interfaces.api --host 127.0.0.1 --port 8000
+python -m agents.interfaces.api --agent default --agent-config ./agents.yaml --host 127.0.0.1 --port 8000
 ```
 
 安装为可执行命令后也支持：
 
 ```bash
 agents-api --host 127.0.0.1 --port 8000
+agents-api --agent default --agent-config ./agents.yaml --host 127.0.0.1 --port 8000
 ```
 
 ### 在 PyCharm 中启动 API
@@ -414,7 +435,7 @@ agents-api --host 127.0.0.1 --port 8000
 2. `Run kind` 选择 **Module name**，填入 `agents.interfaces.api`（或 `agents.api`）。
 3. `Python interpreter` 选择项目 `.venv`（需先 `pip install -e ".[api]"`）。
 4. `Working directory` 设为项目根目录。
-5. `Parameters` 可选：`--host 127.0.0.1 --port 8000 --no-reload`。
+5. `Parameters` 可选：`--host 127.0.0.1 --port 8000 --no-reload --agent default --agent-config ./agents.yaml`。
 6. `Environment variables` 可按需配置：`AGENT_API_HOST`、`AGENT_API_PORT`、`AGENT_CORS_ORIGINS` 等。
 
 接口：
@@ -422,8 +443,10 @@ agents-api --host 127.0.0.1 --port 8000
 - `GET /healthz`：健康检查
 - `POST /chat`：同步对话，返回最终回复
 - `POST /chat/stream`：SSE 流式对话，逐条返回面向调用方可展示的 `AgentEvent`，结束时发送 `done`
+- `POST /agents/{agent_name}/chat`：按 URL 中的 Agent 名称同步对话
+- `POST /agents/{agent_name}/chat/stream`：按 URL 中的 Agent 名称 SSE 流式对话
 
-SSE 请求体与同步接口一致：
+请求体不包含 `agent_name`，Agent 只能通过启动参数或 URL 选择。SSE 请求体与同步接口一致：
 
 ```json
 {

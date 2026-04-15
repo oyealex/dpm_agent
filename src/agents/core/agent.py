@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -10,57 +9,15 @@ from deepagents.backends.filesystem import FilesystemBackend
 from langchain_openai import ChatOpenAI
 
 from agents.config import Settings
-from agents.core.tools import AgentToolProvider, collect_tools
-
-DEFAULT_SYSTEM_PROMPT = "你是我的个人 Agent。"
-
-
-@dataclass(frozen=True)
-class AgentDefinition:
-    """Declarative agent profile for pluggable multi-agent runtime bootstrapping."""
-
-    name: str
-    system_prompt: str = DEFAULT_SYSTEM_PROMPT
-    include_memory: bool = True
-    include_skills: bool = True
-    include_builtin_tools: bool = True
-    tool_providers: tuple[AgentToolProvider, ...] = ()
-    subagents: tuple[Any, ...] = ()
-    create_kwargs: dict[str, Any] = field(default_factory=dict)
-
-
-class AgentRegistry:
-    """Registry for agent definitions that can be addressed by name from CLI/API."""
-
-    def __init__(self, definitions: Iterable[AgentDefinition]) -> None:
-        entries = {item.name: item for item in definitions}
-        if not entries:
-            raise ValueError("At least one agent definition is required.")
-        self._entries = entries
-
-    def get(self, name: str) -> AgentDefinition:
-        key = name.strip()
-        if key not in self._entries:
-            available = ", ".join(sorted(self._entries))
-            raise ValueError(f"Unknown agent '{name}'. Available: {available}")
-        return self._entries[key]
-
-    def list_names(self) -> tuple[str, ...]:
-        return tuple(sorted(self._entries))
-
-
-DEFAULT_AGENT_REGISTRY = AgentRegistry(
-    (
-        AgentDefinition(name="default", system_prompt=DEFAULT_SYSTEM_PROMPT),
-        AgentDefinition(
-            name="db_explorer",
-            system_prompt=(
-                "你是一个数据库探索 Agent。优先通过工具查看 schema 和数据，"
-                "再给出结论；避免假设不存在的表结构。"
-            ),
-        ),
-    )
+from agents.core.definitions import (
+    DEFAULT_AGENT_REGISTRY,
+    DEFAULT_SYSTEM_PROMPT,
+    AgentDefinition,
+    AgentRegistry,
+    LlmResource,
+    prepare_external_path_in_session,
 )
+from agents.core.tools import AgentToolProvider, collect_tools
 
 
 class AgentRuntime:
@@ -70,10 +27,12 @@ class AgentRuntime:
         self,
         settings: Settings,
         definition: AgentDefinition,
+        registry: AgentRegistry = DEFAULT_AGENT_REGISTRY,
         tool_providers: Iterable[AgentToolProvider] = (),
     ) -> None:
         self.settings = settings
         self.definition = definition
+        self.registry = registry
         self.tool_providers = tuple(tool_providers)
 
     def build(self, thread_id: str) -> Any:
@@ -81,6 +40,7 @@ class AgentRuntime:
             self.settings,
             thread_id=thread_id,
             definition=self.definition,
+            registry=self.registry,
             tools=collect_tools(thread_id, self.tool_providers),
         )
 
@@ -90,21 +50,42 @@ def _to_backend_absolute(path: Path, session_dir: Path) -> str:
     return f"/{relative.as_posix()}"
 
 
-def _collect_memory_files(settings: Settings, thread_id: str, session_dir: Path) -> list[str]:
+def _collect_memory_files(
+    settings: Settings,
+    thread_id: str,
+    session_dir: Path,
+    definition: AgentDefinition,
+) -> list[str]:
     memory_dir = settings.effective_session_memory_dir(thread_id)
-    if not memory_dir.exists():
-        return []
     files: list[str] = []
-    for path in sorted(memory_dir.rglob("*.md")):
-        files.append(_to_backend_absolute(path, session_dir))
+    if memory_dir.exists():
+        for path in sorted(memory_dir.rglob("*.md")):
+            files.append(_to_backend_absolute(path, session_dir))
+    for source in definition.memory.paths:
+        mirrored = prepare_external_path_in_session(source, session_dir, "memory")
+        if mirrored.is_dir():
+            for path in sorted(mirrored.rglob("*.md")):
+                files.append(_to_backend_absolute(path, session_dir))
+        else:
+            files.append(_to_backend_absolute(mirrored, session_dir))
     return files
 
 
-def _collect_skill_roots(settings: Settings, thread_id: str, session_dir: Path) -> list[str]:
+def _collect_skill_roots(
+    settings: Settings,
+    thread_id: str,
+    session_dir: Path,
+    definition: AgentDefinition,
+) -> list[str]:
     skills_dir = settings.effective_session_skills_dir(thread_id)
-    if not skills_dir.exists():
-        return []
-    return [_to_backend_absolute(skills_dir, session_dir)]
+    roots: list[str] = []
+    if skills_dir.exists():
+        roots.append(_to_backend_absolute(skills_dir, session_dir))
+    for source in definition.skills.paths:
+        mirrored = prepare_external_path_in_session(source, session_dir, "skills")
+        root = mirrored if mirrored.is_dir() else mirrored.parent
+        roots.append(_to_backend_absolute(root, session_dir))
+    return roots
 
 
 def _openai_model_name(model: str) -> str:
@@ -113,14 +94,19 @@ def _openai_model_name(model: str) -> str:
     return model
 
 
-def build_chat_model(settings: Settings) -> ChatOpenAI:
+def build_chat_model(settings: Settings, llm: LlmResource | None = None) -> ChatOpenAI:
+    model = llm.model if llm and llm.model else settings.model
+    base_url = llm.base_url if llm and llm.base_url else settings.effective_openai_base_url
+    api_key = llm.api_key if llm and llm.api_key else settings.openai_api_key
+    extra_kwargs = dict(llm.kwargs) if llm else {}
     kwargs = {
-        "model": _openai_model_name(settings.model),
-        "base_url": settings.effective_openai_base_url,
+        "model": _openai_model_name(model),
+        "base_url": base_url,
         "use_responses_api": False,
+        **extra_kwargs,
     }
-    if settings.openai_api_key:
-        kwargs["api_key"] = settings.openai_api_key
+    if api_key:
+        kwargs["api_key"] = api_key
     return ChatOpenAI(**kwargs)
 
 
@@ -128,10 +114,11 @@ def build_agent(
     settings: Settings,
     thread_id: str,
     definition: AgentDefinition,
+    registry: AgentRegistry = DEFAULT_AGENT_REGISTRY,
     tools: Iterable[Any] = (),
 ):
     session_dir = settings.ensure_session_directories(thread_id)
-    model = build_chat_model(settings)
+    model = build_chat_model(settings, definition.llm)
     backend = FilesystemBackend(root_dir=str(session_dir), virtual_mode=True)
     tool_list = list(tools)
 
@@ -142,12 +129,43 @@ def build_agent(
         **definition.create_kwargs,
     }
     if definition.include_memory:
-        kwargs["memory"] = _collect_memory_files(settings, thread_id, session_dir)
+        kwargs["memory"] = _collect_memory_files(settings, thread_id, session_dir, definition)
     if definition.include_skills:
-        kwargs["skills"] = _collect_skill_roots(settings, thread_id, session_dir)
+        kwargs["skills"] = _collect_skill_roots(settings, thread_id, session_dir, definition)
     if tool_list:
         kwargs["tools"] = tool_list
-    if definition.subagents:
-        kwargs["subagents"] = list(definition.subagents)
+    if definition.subagent_names:
+        kwargs["subagents"] = _build_subagent_specs(
+            settings=settings,
+            thread_id=thread_id,
+            session_dir=session_dir,
+            registry=registry,
+            names=definition.subagent_names,
+        )
 
     return create_deep_agent(**kwargs)
+
+
+def _build_subagent_specs(
+    settings: Settings,
+    thread_id: str,
+    session_dir: Path,
+    registry: AgentRegistry,
+    names: Iterable[str],
+) -> list[dict[str, Any]]:
+    specs: list[dict[str, Any]] = []
+    for name in names:
+        definition = registry.get(name)
+        spec: dict[str, Any] = {
+            "name": definition.name,
+            "description": f"Configured subagent '{definition.name}'.",
+            "system_prompt": definition.system_prompt,
+            "model": build_chat_model(settings, definition.llm),
+        }
+        tool_list = collect_tools(thread_id, definition.tool_providers)
+        if tool_list:
+            spec["tools"] = tool_list
+        if definition.include_skills:
+            spec["skills"] = _collect_skill_roots(settings, thread_id, session_dir, definition)
+        specs.append(spec)
+    return specs
