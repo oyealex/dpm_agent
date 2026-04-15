@@ -31,13 +31,25 @@ def main() -> None:
             agent_registry=registry,
             agent_name=args.agent_name,
         )
+        user_id = service.settings.normalize_user_id(args.user_id)
         if args.message:
             args.message = sanitize_text(args.message)
             print(color(f"You> {args.message}", "user"))
-            render_stream(service.chat_stream(thread_id=thread_id, message=args.message))
+            render_stream(
+                service.chat_stream(
+                    thread_id=thread_id,
+                    message=args.message,
+                    user_id=user_id,
+                )
+            )
             return
 
-        run_interactive_chat(service=service, thread_id=thread_id, agent_name=args.agent_name)
+        run_interactive_chat(
+            service=service,
+            user_id=user_id,
+            thread_id=thread_id,
+            agent_name=args.agent_name,
+        )
 
 
 
@@ -66,12 +78,16 @@ def _resolve_thread_id(args: argparse.Namespace) -> str:
     return sanitize_text(args.thread_id)
 
 
-def run_interactive_chat(service: AgentService, thread_id: str, agent_name: str = "default") -> None:
-    print(f"Agents interactive chat started. agent={agent_name} thread_id={thread_id}")
-    print(f"Sessions dir: {service.settings.effective_sessions_dir}")
-    print(f"Session dir: {service.settings.effective_session_dir(thread_id)}")
-    print(f"Session skills: {service.settings.effective_session_skills_dir(thread_id)}")
-    print(f"Session memory: {service.settings.effective_session_memory_dir(thread_id)}")
+def run_interactive_chat(
+    service: AgentService,
+    thread_id: str,
+    user_id: str | None = None,
+    agent_name: str = "default",
+) -> None:
+    user_id = service.settings.normalize_user_id(user_id)
+    thread_id = service.settings.normalize_thread_id(thread_id)
+    print(f"Agents interactive chat started. agent={agent_name} user_id={user_id} thread_id={thread_id}")
+    _print_session_context(service, user_id, thread_id)
     print("Type /exit or /quit to leave. Type /help for commands.")
 
     while True:
@@ -87,7 +103,19 @@ def run_interactive_chat(service: AgentService, thread_id: str, agent_name: str 
             print("Bye.")
             return
         if message == "/help":
-            print("Commands: /help, /debug on, /debug off, /exit, /quit")
+            print("Commands: /help, /user, /user <id>, /debug on, /debug off, /exit, /quit")
+            continue
+        if message == "/user":
+            _print_session_context(service, user_id, thread_id)
+            continue
+        if message.startswith("/user "):
+            next_user_id = message.removeprefix("/user ").strip()
+            if not next_user_id:
+                print("Usage: /user <id>")
+                continue
+            user_id = service.settings.normalize_user_id(next_user_id)
+            print(f"Current user: {user_id}")
+            _print_session_context(service, user_id, thread_id)
             continue
         if message == "/debug":
             print("Usage: /debug on | /debug off")
@@ -102,10 +130,19 @@ def run_interactive_chat(service: AgentService, thread_id: str, agent_name: str 
             continue
 
         try:
-            render_stream(service.chat_stream(thread_id=thread_id, message=message))
+            render_stream(service.chat_stream(thread_id=thread_id, message=message, user_id=user_id))
         except Exception as exc:
             print(f"Agent error: {exc}", file=sys.stderr)
             continue
+
+
+def _print_session_context(service: AgentService, user_id: str, thread_id: str) -> None:
+    print(f"Sessions dir: {service.settings.effective_sessions_dir}")
+    print(f"User ID: {user_id}")
+    print(f"Thread ID: {thread_id}")
+    print(f"Session dir: {service.settings.effective_session_dir(user_id, thread_id)}")
+    print(f"Session skills: {service.settings.effective_session_skills_dir(user_id, thread_id)}")
+    print(f"Session memory: {service.settings.effective_session_memory_dir(user_id, thread_id)}")
 
 
 if __name__ == "__main__":

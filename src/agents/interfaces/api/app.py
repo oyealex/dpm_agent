@@ -2,13 +2,20 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from agents.config import Settings
 from agents.core.service import AgentService
-from agents.interfaces.api.schemas import ChatRequest, ChatResponse
+from agents.interfaces.api.schemas import (
+    ChatHistoryResponse,
+    ChatListResponse,
+    ChatRequest,
+    ChatResponse,
+    MessageResponse,
+    ThreadSummaryResponse,
+)
 from agents.interfaces.api.sse import stream_agent_events
 from agents.application.bootstrap import build_service
 from agents.core.definitions import AgentConfigError, AgentRegistry, load_agent_registry
@@ -52,18 +59,22 @@ def create_app(
     @app.post("/agents/{selected_agent_name}/chat", response_model=ChatResponse)
     def chat_for_agent(selected_agent_name: str, request: ChatRequest) -> ChatResponse:
         agent_service = _get_agent_service(app, selected_agent_name)
+        user_id = agent_service.settings.normalize_user_id(request.user_id)
         result = agent_service.chat(
             thread_id=request.thread_id,
             message=request.message,
+            user_id=user_id,
         )
-        return ChatResponse(thread_id=result.thread_id, reply=result.reply)
+        return ChatResponse(user_id=result.user_id, thread_id=result.thread_id, reply=result.reply)
 
     @app.post("/agents/{selected_agent_name}/chat/stream")
     def chat_stream_for_agent(selected_agent_name: str, request: ChatRequest) -> StreamingResponse:
         agent_service = _get_agent_service(app, selected_agent_name)
+        user_id = agent_service.settings.normalize_user_id(request.user_id)
         events = agent_service.chat_stream(
             thread_id=request.thread_id,
             message=request.message,
+            user_id=user_id,
         )
         return StreamingResponse(
             stream_agent_events(events),
@@ -72,6 +83,52 @@ def create_app(
                 "Cache-Control": "no-cache",
                 "X-Accel-Buffering": "no",
             },
+        )
+
+    @app.get("/users/{user_id}/chats", response_model=ChatListResponse)
+    def list_user_chats(
+        user_id: str,
+        limit: int = Query(default=50, ge=1),
+        offset: int = Query(default=0, ge=0),
+    ) -> ChatListResponse:
+        agent_service = _get_agent_service(app, agent_name)
+        normalized_user_id = agent_service.settings.normalize_user_id(user_id)
+        page = agent_service.chat_repository.list_threads(
+            user_id=normalized_user_id,
+            limit=limit,
+            offset=offset,
+        )
+        return ChatListResponse(
+            user_id=normalized_user_id,
+            items=[ThreadSummaryResponse.from_summary(item) for item in page.items],
+            limit=page.limit,
+            offset=page.offset,
+            has_more=page.has_more,
+        )
+
+    @app.get("/users/{user_id}/chats/{thread_id}/messages", response_model=ChatHistoryResponse)
+    def list_chat_history(
+        user_id: str,
+        thread_id: str,
+        limit: int = Query(default=50, ge=1),
+        offset: int = Query(default=0, ge=0),
+    ) -> ChatHistoryResponse:
+        agent_service = _get_agent_service(app, agent_name)
+        normalized_user_id = agent_service.settings.normalize_user_id(user_id)
+        normalized_thread_id = agent_service.settings.normalize_thread_id(thread_id)
+        page = agent_service.chat_repository.list_thread_history(
+            user_id=normalized_user_id,
+            thread_id=normalized_thread_id,
+            limit=limit,
+            offset=offset,
+        )
+        return ChatHistoryResponse(
+            user_id=normalized_user_id,
+            thread_id=normalized_thread_id,
+            items=[MessageResponse.from_message(item) for item in page.items],
+            limit=page.limit,
+            offset=page.offset,
+            has_more=page.has_more,
         )
 
     return app

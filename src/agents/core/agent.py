@@ -35,13 +35,15 @@ class AgentRuntime:
         self.registry = registry
         self.tool_providers = tuple(tool_providers)
 
-    def build(self, thread_id: str) -> Any:
+    def build(self, user_id: str, thread_id: str) -> Any:
+        runtime_thread_id = self.settings.runtime_thread_id(user_id, thread_id)
         return build_agent(
             self.settings,
+            user_id=user_id,
             thread_id=thread_id,
             definition=self.definition,
             registry=self.registry,
-            tools=collect_tools(thread_id, self.tool_providers),
+            tools=collect_tools(runtime_thread_id, self.tool_providers),
         )
 
 
@@ -52,10 +54,11 @@ def _to_backend_absolute(path: Path, session_dir: Path) -> str:
 
 def _collect_memory_files(
     settings: Settings,
+    user_id: str,
     thread_id: str,
     session_dir: Path,
 ) -> list[str]:
-    memory_dir = settings.effective_session_memory_dir(thread_id)
+    memory_dir = settings.effective_session_memory_dir(user_id, thread_id)
     files: list[str] = []
     if memory_dir.exists():
         for path in sorted(memory_dir.rglob("*.md")):
@@ -65,10 +68,11 @@ def _collect_memory_files(
 
 def _collect_skill_roots(
     settings: Settings,
+    user_id: str,
     thread_id: str,
     session_dir: Path,
 ) -> list[str]:
-    skills_dir = settings.effective_session_skills_dir(thread_id)
+    skills_dir = settings.effective_session_skills_dir(user_id, thread_id)
     if skills_dir.exists():
         return [_to_backend_absolute(skills_dir, session_dir)]
     return []
@@ -76,20 +80,22 @@ def _collect_skill_roots(
 
 def _sync_configured_skills(
     settings: Settings,
+    user_id: str,
     thread_id: str,
     definition: AgentDefinition,
 ) -> None:
-    skills_dir = settings.effective_session_skills_dir(thread_id)
+    skills_dir = settings.effective_session_skills_dir(user_id, thread_id)
     for source in definition.skills.paths:
         prepare_external_path_in_session(source, skills_dir, "skills")
 
 
 def _sync_configured_memory(
     settings: Settings,
+    user_id: str,
     thread_id: str,
     definition: AgentDefinition,
 ) -> None:
-    memory_dir = settings.effective_session_memory_dir(thread_id)
+    memory_dir = settings.effective_session_memory_dir(user_id, thread_id)
     for source in definition.memory.paths:
         prepare_external_path_in_session(source, memory_dir, "memory")
 
@@ -118,16 +124,17 @@ def build_chat_model(settings: Settings, llm: LlmResource | None = None) -> Chat
 
 def build_agent(
     settings: Settings,
+    user_id: str,
     thread_id: str,
     definition: AgentDefinition,
     registry: AgentRegistry = DEFAULT_AGENT_REGISTRY,
     tools: Iterable[Any] = (),
 ):
-    session_dir = settings.ensure_session_directories(thread_id)
+    session_dir = settings.ensure_session_directories(user_id, thread_id)
     if definition.include_skills:
-        _sync_configured_skills(settings, thread_id, definition)
+        _sync_configured_skills(settings, user_id, thread_id, definition)
     if definition.include_memory:
-        _sync_configured_memory(settings, thread_id, definition)
+        _sync_configured_memory(settings, user_id, thread_id, definition)
     model = build_chat_model(settings, definition.llm)
     backend = FilesystemBackend(root_dir=str(session_dir), virtual_mode=True)
     tool_list = list(tools)
@@ -139,14 +146,15 @@ def build_agent(
         **definition.create_kwargs,
     }
     if definition.include_memory:
-        kwargs["memory"] = _collect_memory_files(settings, thread_id, session_dir)
+        kwargs["memory"] = _collect_memory_files(settings, user_id, thread_id, session_dir)
     if definition.include_skills:
-        kwargs["skills"] = _collect_skill_roots(settings, thread_id, session_dir)
+        kwargs["skills"] = _collect_skill_roots(settings, user_id, thread_id, session_dir)
     if tool_list:
         kwargs["tools"] = tool_list
     if definition.subagent_names:
         kwargs["subagents"] = _build_subagent_specs(
             settings=settings,
+            user_id=user_id,
             thread_id=thread_id,
             session_dir=session_dir,
             registry=registry,
@@ -158,12 +166,14 @@ def build_agent(
 
 def _build_subagent_specs(
     settings: Settings,
+    user_id: str,
     thread_id: str,
     session_dir: Path,
     registry: AgentRegistry,
     names: Iterable[str],
 ) -> list[dict[str, Any]]:
     specs: list[dict[str, Any]] = []
+    runtime_thread_id = settings.runtime_thread_id(user_id, thread_id)
     for name in names:
         definition = registry.get(name)
         spec: dict[str, Any] = {
@@ -172,11 +182,11 @@ def _build_subagent_specs(
             "system_prompt": definition.system_prompt,
             "model": build_chat_model(settings, definition.llm),
         }
-        tool_list = collect_tools(thread_id, definition.tool_providers)
+        tool_list = collect_tools(runtime_thread_id, definition.tool_providers)
         if tool_list:
             spec["tools"] = tool_list
         if definition.include_skills:
-            _sync_configured_skills(settings, thread_id, definition)
-            spec["skills"] = _collect_skill_roots(settings, thread_id, session_dir)
+            _sync_configured_skills(settings, user_id, thread_id, definition)
+            spec["skills"] = _collect_skill_roots(settings, user_id, thread_id, session_dir)
         specs.append(spec)
     return specs

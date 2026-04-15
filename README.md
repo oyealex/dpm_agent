@@ -32,9 +32,9 @@
 - `src/agents/*.py`
   - 顶层兼容模块，保留旧导入路径和 `agents` 命令入口
 - `memory/`
-  - 默认位于 `data/sessions/<session-id>/memory/`，以文件形式维护该会话的长期记忆，作为 agent 启动时的注入上下文
+  - 默认位于 `data/sessions/<user-id>/<session-id>/memory/`，以文件形式维护该用户会话的长期记忆，作为 agent 启动时的注入上下文
 - `skills/`
-  - 默认位于 `data/sessions/<session-id>/skills/`，以 `SKILL.md` 组织该会话可用的技能目录
+  - 默认位于 `data/sessions/<user-id>/<session-id>/skills/`，以 `SKILL.md` 组织该用户会话可用的技能目录
 - `docs/architecture.md`
   - 详细设计说明
 
@@ -76,7 +76,8 @@ export AGENT_MODEL="openai:gpt-4.1"
 | `AGENT_STORAGE_BACKEND` | `sqlite` | 存储后端。支持 `sqlite`、`postgres`、`postgresql`、`pg`。 |
 | `AGENT_DB_PATH` | `./data/agent.sqlite3` | SQLite 数据库路径。仅 SQLite 后端使用。 |
 | `AGENT_POSTGRES_DSN` | 空 | PostgreSQL DSN。 |
-| `AGENT_SESSIONS_DIR` | `./data/sessions` | 会话文件根目录；每个 `thread_id` 会拥有独立 `memory/`、`skills/` 和运行期文件目录。CLI 的 `--sessions-dir` 可覆盖。 |
+| `AGENT_SESSIONS_DIR` | `./data/sessions` | 会话文件根目录；每个 `<user_id>/<thread_id>` 会拥有独立 `memory/`、`skills/` 和运行期文件目录。CLI 的 `--sessions-dir` 可覆盖。 |
+| `AGENT_DEFAULT_USER_ID` | `default` | 未显式指定用户时使用的默认用户隔离标识。 |
 | `AGENT_API_HOST` | `127.0.0.1` | Python 方式启动 API 时监听的 host；`--host` 可覆盖。 |
 | `AGENT_API_PORT` | `8000` | Python 方式启动 API 时监听的 port；`--port` 可覆盖。 |
 | `AGENT_API_RELOAD` | `false` | Python 方式启动 API 时是否启用 reload；`--reload` / `--no-reload` 可覆盖。 |
@@ -135,18 +136,19 @@ agent_custom = settings.effective_custom_agent_env
 tool_custom = settings.effective_custom_tool_env
 ```
 
-默认数据目录是当前目录下的 `data/`。SQLite 对话历史是全局共享数据库，默认是 `./data/agent.sqlite3`；PostgreSQL 使用 `AGENT_POSTGRES_DSN`。每个对话会按 `thread_id` 在 `./data/sessions/` 下创建独立文件目录，里面包含该会话自己的 `skills/` 和 `memory/`。
+默认数据目录是当前目录下的 `data/`。SQLite 对话历史是全局共享数据库，默认是 `./data/agent.sqlite3`；PostgreSQL 使用 `AGENT_POSTGRES_DSN`。每个对话会按 `user_id` 和 `thread_id` 在 `./data/sessions/` 下创建独立文件目录，里面包含该用户会话自己的 `skills/` 和 `memory/`。`user_id` 是隔离标识，不是认证或授权机制；未指定时使用 `default`。
 
 ```text
 data/
   agent.sqlite3
   sessions/
-    <session-id>/
-      memory/
-      skills/
+    <user-id>/
+      <session-id>/
+        memory/
+        skills/
 ```
 
-如果 Agent 或工具链需要写入临时文件、中间结果、下载缓存、生成草稿等运行期产物，直接写到当前 `sessions/<session-id>/` 目录下。`memory/` 只放应该长期注入上下文的记忆文件。
+如果 Agent 或工具链需要写入临时文件、中间结果、下载缓存、生成草稿等运行期产物，直接写到当前 `sessions/<user-id>/<session-id>/` 目录下。`memory/` 只放应该长期注入上下文的记忆文件。旧数据库记录会归属默认用户 `default`；新版本会为访问到的用户会话创建新的双层 session 目录。
 
 ## 运行
 
@@ -178,6 +180,13 @@ agents --sessions-dir ./data/sessions
 agents chat --sessions-dir ./data/sessions --thread-id work
 ```
 
+指定用户隔离标识：
+
+```bash
+agents --user-id oye
+agents chat --user-id oye --thread-id work
+```
+
 默认不会显示中间请求日志，只显示交互内容。需要调试时可以启动时打开：
 
 ```bash
@@ -207,7 +216,16 @@ agents --debug
 agents chat --thread-id work
 ```
 
-交互模式中输入 `/exit` 或 `/quit` 退出。同一个 `thread_id` 的历史会自动从 SQLite 读取并继续。使用 `--new` 会生成随机 `thread_id`，因此会进入一个全新的 `data/sessions/<session-id>/` 目录。
+交互模式中输入 `/exit` 或 `/quit` 退出。同一个 `user_id` + `thread_id` 的历史会自动从 SQLite 读取并继续。使用 `--new` 会生成随机 `thread_id`，因此会进入一个全新的 `data/sessions/<user-id>/<session-id>/` 目录。
+
+交互模式支持查看和切换用户：
+
+```text
+/user
+/user alice
+```
+
+切换用户只影响后续消息的用户作用域，不会改变当前 `thread_id` 或启动时选择的 Agent。
 
 也可以发送单条消息后退出：
 
@@ -305,9 +323,11 @@ POST /chat
 POST /chat/stream
 POST /agents/{agent_name}/chat
 POST /agents/{agent_name}/chat/stream
+GET /users/{user_id}/chats
+GET /users/{user_id}/chats/{thread_id}/messages
 ```
 
-请求体不支持切换 Agent。
+请求体不支持切换 Agent；用户通过 Body 中的 `user_id` 区分，未传时使用默认用户 `default`。
 
 ### 自定义 Tool Provider
 
@@ -448,15 +468,27 @@ agents-api --agent default --agent-config ./agents.yaml --host 127.0.0.1 --port 
 - `POST /chat/stream`：SSE 流式对话，逐条返回面向调用方可展示的 `AgentEvent`，结束时发送 `done`
 - `POST /agents/{agent_name}/chat`：按 URL 中的 Agent 名称同步对话
 - `POST /agents/{agent_name}/chat/stream`：按 URL 中的 Agent 名称 SSE 流式对话
+- `GET /users/{user_id}/chats`：分页查询指定用户的聊天会话列表
+- `GET /users/{user_id}/chats/{thread_id}/messages`：分页查询指定用户、指定聊天的历史消息
 
 请求体不包含 `agent_name`，Agent 只能通过启动参数或 URL 选择。SSE 请求体与同步接口一致：
 
 ```json
 {
+  "user_id": "default",
   "thread_id": "default",
   "message": "帮我整理今天的任务"
 }
 ```
+
+同步聊天响应会返回实际使用的 `user_id` 和 `thread_id`。历史查询支持 `limit` 和 `offset`，例如：
+
+```text
+GET /users/default/chats?limit=20&offset=0
+GET /users/default/chats/work/messages?limit=50&offset=0
+```
+
+不存在的聊天历史返回空消息列表。`limit` 会被限制在系统允许的最大分页大小内。
 
 SSE 流不会返回 `internal_state` 事件；这类事件属于 DeepAgents/LangGraph 内部状态同步，不适合作为前端可见过程展示。
 

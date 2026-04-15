@@ -10,25 +10,31 @@ from agents.config import Settings
 
 SQLITE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS threads (
-    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL DEFAULT 'default',
+    id TEXT NOT NULL,
     title TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(user_id, id)
 );
 
 CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL DEFAULT 'default',
     thread_id TEXT NOT NULL,
     role TEXT NOT NULL,
     message_type TEXT NOT NULL DEFAULT 'message',
     content TEXT NOT NULL,
     metadata_json TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(thread_id) REFERENCES threads(id)
+    FOREIGN KEY(user_id, thread_id) REFERENCES threads(user_id, id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_thread_id_id
-ON messages(thread_id, id);
+ON messages(user_id, thread_id, id);
+
+CREATE INDEX IF NOT EXISTS idx_threads_user_updated
+ON threads(user_id, updated_at DESC, id);
 
 CREATE TABLE IF NOT EXISTS memory_entries (
     path TEXT PRIMARY KEY,
@@ -42,24 +48,31 @@ SCHEMA = SQLITE_SCHEMA
 
 POSTGRES_SCHEMA = """
 CREATE TABLE IF NOT EXISTS threads (
-    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL DEFAULT 'default',
+    id TEXT NOT NULL,
     title TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(user_id, id)
 );
 
 CREATE TABLE IF NOT EXISTS messages (
     id BIGSERIAL PRIMARY KEY,
-    thread_id TEXT NOT NULL REFERENCES threads(id),
+    user_id TEXT NOT NULL DEFAULT 'default',
+    thread_id TEXT NOT NULL,
     role TEXT NOT NULL,
     message_type TEXT NOT NULL DEFAULT 'message',
     content TEXT NOT NULL,
     metadata_json TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(user_id, thread_id) REFERENCES threads(user_id, id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_thread_id_id
-ON messages(thread_id, id);
+ON messages(user_id, thread_id, id);
+
+CREATE INDEX IF NOT EXISTS idx_threads_user_updated
+ON threads(user_id, updated_at DESC, id);
 
 CREATE TABLE IF NOT EXISTS memory_entries (
     path TEXT PRIMARY KEY,
@@ -133,30 +146,153 @@ def connect_database(settings: Settings) -> Database:
 
 def initialize_database(database: sqlite3.Connection | Database) -> None:
     if isinstance(database, sqlite3.Connection):
+        _migrate_sqlite_user_scope(database)
         database.executescript(SQLITE_SCHEMA)
-        _ensure_sqlite_column(database, "messages", "message_type", "TEXT NOT NULL DEFAULT 'message'")
-        _ensure_sqlite_column(database, "messages", "metadata_json", "TEXT")
+        _ensure_sqlite_message_columns(database)
         database.commit()
         return
 
     if database.backend == "sqlite":
+        _migrate_sqlite_user_scope(database.connection)
         database.executescript(SQLITE_SCHEMA)
-        _ensure_sqlite_column(
-            database.connection,
-            "messages",
-            "message_type",
-            "TEXT NOT NULL DEFAULT 'message'",
-        )
-        _ensure_sqlite_column(database.connection, "messages", "metadata_json", "TEXT")
+        _ensure_sqlite_message_columns(database.connection)
         database.commit()
         return
 
     if database.backend == "postgres":
         database.executescript(POSTGRES_SCHEMA)
+        _migrate_postgres_user_scope(database)
         database.commit()
         return
 
     raise ValueError(f"Unsupported storage backend: {database.backend}")
+
+
+def _ensure_sqlite_message_columns(connection: sqlite3.Connection) -> None:
+    _ensure_sqlite_column(connection, "messages", "user_id", "TEXT NOT NULL DEFAULT 'default'")
+    _ensure_sqlite_column(connection, "messages", "message_type", "TEXT NOT NULL DEFAULT 'message'")
+    _ensure_sqlite_column(connection, "messages", "metadata_json", "TEXT")
+
+
+def _migrate_sqlite_user_scope(connection: sqlite3.Connection) -> None:
+    if not _sqlite_table_exists(connection, "threads"):
+        return
+
+    if not _sqlite_threads_need_rebuild(connection):
+        _ensure_sqlite_column(connection, "messages", "user_id", "TEXT NOT NULL DEFAULT 'default'")
+        return
+
+    connection.execute("PRAGMA foreign_keys = OFF")
+    _rebuild_sqlite_threads(connection)
+    if _sqlite_table_exists(connection, "messages"):
+        _rebuild_sqlite_messages(connection)
+    connection.execute("PRAGMA foreign_keys = ON")
+
+
+def _sqlite_table_exists(connection: sqlite3.Connection, table_name: str) -> bool:
+    row = connection.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table_name,),
+    ).fetchone()
+    return row is not None
+
+
+def _sqlite_threads_need_rebuild(connection: sqlite3.Connection) -> bool:
+    columns = connection.execute("PRAGMA table_info(threads)").fetchall()
+    pk_columns = [
+        (column["pk"], column["name"])
+        for column in columns
+        if column["pk"]
+    ]
+    return pk_columns != [(1, "user_id"), (2, "id")]
+
+
+def _rebuild_sqlite_threads(connection: sqlite3.Connection) -> None:
+    columns = {column["name"] for column in connection.execute("PRAGMA table_info(threads)").fetchall()}
+    user_expr = "COALESCE(user_id, 'default')" if "user_id" in columns else "'default'"
+    connection.execute("ALTER TABLE threads RENAME TO threads_old_user_scope")
+    connection.execute(
+        """
+        CREATE TABLE threads (
+            user_id TEXT NOT NULL DEFAULT 'default',
+            id TEXT NOT NULL,
+            title TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY(user_id, id)
+        )
+        """
+    )
+    connection.execute(
+        f"""
+        INSERT OR REPLACE INTO threads(user_id, id, title, created_at, updated_at)
+        SELECT {user_expr}, id, title, created_at, updated_at
+        FROM threads_old_user_scope
+        """
+    )
+    connection.execute("DROP TABLE threads_old_user_scope")
+
+
+def _rebuild_sqlite_messages(connection: sqlite3.Connection) -> None:
+    columns = {column["name"] for column in connection.execute("PRAGMA table_info(messages)").fetchall()}
+    user_expr = "COALESCE(user_id, 'default')" if "user_id" in columns else "'default'"
+    message_type_expr = (
+        "message_type"
+        if "message_type" in columns
+        else "'message'"
+    )
+    metadata_expr = "metadata_json" if "metadata_json" in columns else "NULL"
+
+    connection.execute("ALTER TABLE messages RENAME TO messages_old_user_scope")
+    connection.execute(
+        """
+        CREATE TABLE messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL DEFAULT 'default',
+            thread_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            message_type TEXT NOT NULL DEFAULT 'message',
+            content TEXT NOT NULL,
+            metadata_json TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(user_id, thread_id) REFERENCES threads(user_id, id)
+        )
+        """
+    )
+    connection.execute(
+        f"""
+        INSERT INTO messages(id, user_id, thread_id, role, message_type, content, metadata_json, created_at)
+        SELECT id, {user_expr}, thread_id, role, {message_type_expr}, content, {metadata_expr}, created_at
+        FROM messages_old_user_scope
+        """
+    )
+    connection.execute("DROP TABLE messages_old_user_scope")
+
+
+def _migrate_postgres_user_scope(database: Database) -> None:
+    statements = [
+        "ALTER TABLE messages DROP CONSTRAINT IF EXISTS messages_thread_id_fkey",
+        "ALTER TABLE messages DROP CONSTRAINT IF EXISTS messages_user_id_thread_id_fkey",
+        "ALTER TABLE threads ADD COLUMN IF NOT EXISTS user_id TEXT NOT NULL DEFAULT 'default'",
+        "ALTER TABLE messages ADD COLUMN IF NOT EXISTS user_id TEXT NOT NULL DEFAULT 'default'",
+        "ALTER TABLE threads DROP CONSTRAINT IF EXISTS threads_pkey",
+        "ALTER TABLE threads ADD PRIMARY KEY (user_id, id)",
+        """
+        ALTER TABLE messages
+        ADD CONSTRAINT messages_user_id_thread_id_fkey
+        FOREIGN KEY(user_id, thread_id) REFERENCES threads(user_id, id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_messages_thread_id_id
+        ON messages(user_id, thread_id, id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_threads_user_updated
+        ON threads(user_id, updated_at DESC, id)
+        """,
+    ]
+    for statement in statements:
+        database.execute(statement)
 
 
 def _ensure_sqlite_column(

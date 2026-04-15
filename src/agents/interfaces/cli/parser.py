@@ -28,6 +28,11 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"Conversation thread ID, defaults to '{DEFAULT_THREAD_ID}'",
     )
     parser.add_argument(
+        "--user-id",
+        default=None,
+        help="User ID for session isolation. Defaults to AGENT_DEFAULT_USER_ID or 'default'.",
+    )
+    parser.add_argument(
         "--message",
         help="Send one message and exit. If omitted, starts interactive mode.",
     )

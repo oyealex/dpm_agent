@@ -27,26 +27,35 @@ class AgentService:
         self.chat_repository = chat_repository
         self.memory_repository = memory_repository
         self.runtime = runtime or AgentRuntime(settings)
-        self._agents: dict[str, Any] = {}
+        self._agents: dict[tuple[str, str], Any] = {}
 
-    def chat(self, thread_id: str, message: str) -> ChatResult:
-        thread_id = sanitize_text(thread_id)
-        events = list(self.chat_stream(thread_id=thread_id, message=message))
+    def chat(self, thread_id: str, message: str, user_id: str | None = None) -> ChatResult:
+        user_id = self.settings.normalize_user_id(user_id)
+        thread_id = self.settings.normalize_thread_id(thread_id)
+        events = list(self.chat_stream(thread_id=thread_id, message=message, user_id=user_id))
         reply = "".join(
             event.content for event in events if event.event_type == "assistant_delta"
         ).strip()
         if not reply:
             reply = _last_event_content(events, "assistant_message")
-        return ChatResult(thread_id=thread_id, reply=reply, events=events)
+        return ChatResult(user_id=user_id, thread_id=thread_id, reply=reply, events=events)
 
-    def chat_stream(self, thread_id: str, message: str) -> Iterator[AgentEvent]:
-        thread_id = sanitize_text(thread_id)
+    def chat_stream(
+        self,
+        thread_id: str,
+        message: str,
+        user_id: str | None = None,
+    ) -> Iterator[AgentEvent]:
+        user_id = self.settings.normalize_user_id(user_id)
+        thread_id = self.settings.normalize_thread_id(thread_id)
         message = sanitize_text(message)
-        logger.info("Preparing chat request: thread_id=%s", thread_id)
-        self.settings.ensure_session_directories(thread_id)
-        self.memory_repository.sync_directory(self.settings.effective_session_memory_dir(thread_id))
-        self.chat_repository.ensure_thread(thread_id=thread_id, title=thread_id)
-        history = self.chat_repository.list_messages(thread_id)
+        logger.info("Preparing chat request: user_id=%s thread_id=%s", user_id, thread_id)
+        self.settings.ensure_session_directories(user_id, thread_id)
+        self.memory_repository.sync_directory(
+            self.settings.effective_session_memory_dir(user_id, thread_id)
+        )
+        self.chat_repository.ensure_thread(thread_id=thread_id, title=thread_id, user_id=user_id)
+        history = self.chat_repository.list_messages(thread_id, user_id=user_id)
         logger.info("Loaded %d historical messages", len(history))
 
         messages = [
@@ -60,7 +69,7 @@ class AgentService:
             self.settings.effective_model_name,
             self.settings.effective_openai_base_url,
             len(messages),
-            self.settings.effective_session_dir(thread_id),
+            self.settings.effective_session_dir(user_id, thread_id),
         )
         events: list[AgentEvent] = [
             AgentEvent(event_type="user_message", role="user", content=message)
@@ -69,7 +78,9 @@ class AgentService:
 
         reply_parts: list[str] = []
         try:
-            for event in dedupe_events(self._stream_agent(messages=messages, thread_id=thread_id)):
+            for event in dedupe_events(
+                self._stream_agent(messages=messages, user_id=user_id, thread_id=thread_id)
+            ):
                 event = apply_event_content_limits(
                     event,
                     self.runtime.definition.event_content_limits,
@@ -96,12 +107,18 @@ class AgentService:
             events.append(assistant_event)
             yield assistant_event
 
-        self.chat_repository.add_events(thread_id, events)
+        self.chat_repository.add_events(thread_id, events, user_id=user_id)
 
-    def _stream_agent(self, messages: list[dict[str, str]], thread_id: str) -> Iterator[AgentEvent]:
+    def _stream_agent(
+        self,
+        messages: list[dict[str, str]],
+        user_id: str,
+        thread_id: str,
+    ) -> Iterator[AgentEvent]:
         payload = {"messages": messages}
-        config = {"configurable": {"thread_id": thread_id}}
-        agent = self._get_agent(thread_id)
+        runtime_thread_id = self.settings.runtime_thread_id(user_id, thread_id)
+        config = {"configurable": {"thread_id": runtime_thread_id}}
+        agent = self._get_agent(user_id, thread_id)
         try:
             stream = agent.stream(payload, config=config, stream_mode=["messages", "updates"])
         except TypeError:
@@ -116,11 +133,12 @@ class AgentService:
         for chunk in stream:
             yield from events_from_stream_chunk(chunk)
 
-    def _get_agent(self, thread_id: str) -> Any:
-        agent = self._agents.get(thread_id)
+    def _get_agent(self, user_id: str, thread_id: str) -> Any:
+        key = (user_id, thread_id)
+        agent = self._agents.get(key)
         if agent is None:
-            agent = self.runtime.build(thread_id)
-            self._agents[thread_id] = agent
+            agent = self.runtime.build(user_id, thread_id)
+            self._agents[key] = agent
         return agent
 
 

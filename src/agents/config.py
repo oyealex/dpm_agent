@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     postgres_dsn: str | None = Field(default=None)
     db_path: Path = Field(default=Path("./data/agent.sqlite3"))
     sessions_dir: Path = Field(default=Path("./data/sessions"))
+    default_user_id: str = "default"
     openai_base_url: str = "https://api.openai.com/v1"
     openai_api_key: str | None = Field(default=None)
     api_host: str = "127.0.0.1"
@@ -115,6 +116,10 @@ class Settings(BaseSettings):
     def effective_custom_tool_env(self) -> dict[str, str]:
         return self.collect_custom_env(prefixes=("AGENT_TOOL_",))
 
+    @property
+    def effective_default_user_id(self) -> str:
+        return safe_path_id(self.default_user_id)
+
     def collect_custom_env(self, prefixes: tuple[str, ...] | None = None) -> dict[str, str]:
         active_prefixes = (
             tuple(prefix.upper() for prefix in prefixes)
@@ -135,21 +140,36 @@ class Settings(BaseSettings):
                 custom_env[upper_key] = sanitize_text(value)
         return custom_env
 
-    def effective_session_dir(self, thread_id: str) -> Path:
-        return (self.effective_sessions_dir / _safe_session_id(thread_id)).resolve()
+    def normalize_user_id(self, user_id: str | None = None) -> str:
+        return safe_path_id(user_id or self.effective_default_user_id)
 
-    def effective_session_skills_dir(self, thread_id: str) -> Path:
-        return self.effective_session_dir(thread_id) / "skills"
+    def normalize_thread_id(self, thread_id: str | None = None) -> str:
+        return safe_path_id(thread_id or "default")
 
-    def effective_session_memory_dir(self, thread_id: str) -> Path:
-        return self.effective_session_dir(thread_id) / "memory"
+    def runtime_thread_id(self, user_id: str, thread_id: str) -> str:
+        user = self.normalize_user_id(user_id)
+        thread = self.normalize_thread_id(thread_id)
+        return f"{user}/{thread}"
 
-    def ensure_session_directories(self, thread_id: str) -> Path:
-        session_dir = self.effective_session_dir(thread_id)
+    def effective_session_dir(self, user_id: str, thread_id: str) -> Path:
+        return (
+            self.effective_sessions_dir
+            / self.normalize_user_id(user_id)
+            / self.normalize_thread_id(thread_id)
+        ).resolve()
+
+    def effective_session_skills_dir(self, user_id: str, thread_id: str) -> Path:
+        return self.effective_session_dir(user_id, thread_id) / "skills"
+
+    def effective_session_memory_dir(self, user_id: str, thread_id: str) -> Path:
+        return self.effective_session_dir(user_id, thread_id) / "memory"
+
+    def ensure_session_directories(self, user_id: str, thread_id: str) -> Path:
+        session_dir = self.effective_session_dir(user_id, thread_id)
         self._assert_inside_sessions_dir(session_dir)
         session_dir.mkdir(parents=True, exist_ok=True)
-        self.effective_session_skills_dir(thread_id).mkdir(parents=True, exist_ok=True)
-        self.effective_session_memory_dir(thread_id).mkdir(parents=True, exist_ok=True)
+        self.effective_session_skills_dir(user_id, thread_id).mkdir(parents=True, exist_ok=True)
+        self.effective_session_memory_dir(user_id, thread_id).mkdir(parents=True, exist_ok=True)
         return session_dir
 
     def _assert_inside_sessions_dir(self, path: Path) -> None:
@@ -161,9 +181,9 @@ class Settings(BaseSettings):
             ) from exc
 
 
-def _safe_session_id(thread_id: str) -> str:
-    thread_id = sanitize_text(thread_id)
-    cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "_", thread_id).strip("._-")
+def safe_path_id(value: str | None, default: str = "default") -> str:
+    value = sanitize_text(value or default)
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("._-")
     return cleaned or "default"
 
 
