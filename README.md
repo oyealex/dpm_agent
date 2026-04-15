@@ -82,6 +82,7 @@ export AGENT_MODEL="openai:gpt-4.1"
 | `AGENT_CORS_ALLOW_CREDENTIALS` | `false` | CORS 是否允许 credentials。设为 `true` 时不要把 origins 配成 `*`，应明确列出前端域名。 |
 | `AGENT_CORS_ALLOW_METHODS` | `*` | CORS 允许的方法，逗号分隔。 |
 | `AGENT_CORS_ALLOW_HEADERS` | `*` | CORS 允许的请求头，逗号分隔。 |
+| `AGENT_CUSTOM_ENV_PREFIXES` | `AGENT_CUSTOM_,AGENT_AGENT_,AGENT_TOOL_` | 自定义环境变量前缀（逗号分隔）。匹配到的环境变量会被 `Settings.effective_custom_env` 收集，供后续自定义 Agent/Tool 读取。 |
 | `NO_COLOR` | 空 | 设置后关闭 CLI 彩色输出。 |
 
 SQLite 配置示例：
@@ -111,6 +112,25 @@ export AGENT_API_HOST="0.0.0.0"
 export AGENT_API_PORT="8000"
 export AGENT_API_RELOAD="false"
 export AGENT_CORS_ORIGINS="http://localhost:3000,http://127.0.0.1:5173"
+```
+
+自定义 Agent/Tool 配置环境变量示例：
+
+```bash
+export AGENT_AGENT_PROFILE="researcher"
+export AGENT_TOOL_SEARCH_TIMEOUT="15"
+export AGENT_CUSTOM_FOO="bar"
+```
+
+在代码中可通过 `Settings` 读取：
+
+```python
+from dpm_agent.config import Settings
+
+settings = Settings()
+all_custom = settings.effective_custom_env
+agent_custom = settings.effective_custom_agent_env
+tool_custom = settings.effective_custom_tool_env
 ```
 
 默认数据目录是当前目录下的 `data/`。SQLite 对话历史是全局共享数据库，默认是 `./data/agent.sqlite3`；PostgreSQL 使用 `AGENT_POSTGRES_DSN`。每个对话会按 `thread_id` 在 `./data/sessions/` 下创建独立文件目录，里面包含该会话自己的 `skills/` 和 `memory/`。

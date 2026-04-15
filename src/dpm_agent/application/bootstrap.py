@@ -33,6 +33,12 @@ def build_service(
     if settings.effective_storage_backend == "sqlite":
         logger.info("SQLite DB path: %s", settings.effective_db_path)
     logger.info("Sessions dir: %s", settings.effective_sessions_dir)
+    logger.info(
+        "Custom env loaded: total=%s agent=%s tool=%s",
+        len(settings.effective_custom_env),
+        len(settings.effective_custom_agent_env),
+        len(settings.effective_custom_tool_env),
+    )
 
     database = connect_database(settings)
     initialize_database(database)
