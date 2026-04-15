@@ -1,4 +1,4 @@
-# DPM Agent
+# Agents
 
 一个基于 `DeepAgents` 的个人 Agent 骨架，目标是支持：
 
@@ -28,7 +28,7 @@
 - `src/agents/application/bootstrap.py`
   - 应用装配入口，连接配置、数据库、repository、runtime 和 service
 - `src/agents/*.py`
-  - 顶层兼容模块，保留旧导入路径和 `dpm-agent` 命令入口
+  - 顶层兼容模块，保留旧导入路径和 `agents` 命令入口
 - `memory/`
   - 默认位于 `data/sessions/<session-id>/memory/`，以文件形式维护该会话的长期记忆，作为 agent 启动时的注入上下文
 - `skills/`
@@ -66,7 +66,7 @@ export AGENT_MODEL="openai:gpt-4.1"
 
 | 环境变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `AGENT_APP_NAME` | `dpm-agent` | 应用名称，主要用于日志。 |
+| `AGENT_APP_NAME` | `agents` | 应用名称，主要用于日志。 |
 | `AGENT_DEBUG` | `false` | 开启 debug 日志；CLI/API 的 `--debug` / `--no-debug` 可覆盖。 |
 | `AGENT_MODEL` | `openai:gpt-4.1` | LLM 模型。`openai:<model>` 会在请求 provider 时去掉 `openai:` 前缀。 |
 | `AGENT_OPENAI_API_KEY` | 空 | OpenAI-compatible API key。 |
@@ -151,27 +151,34 @@ data/
 启动连续对话：
 
 ```bash
-dpm-agent
+agents
+```
+
+指定 Agent 启动：
+
+```bash
+agents db_explorer
+agents db_explorer chat --thread-id work
 ```
 
 开启一个随机 ID 的新会话：
 
 ```bash
-dpm-agent --new
-dpm-agent chat --new
+agents --new
+agents chat --new
 ```
 
 指定 sessions 目录：
 
 ```bash
-dpm-agent --sessions-dir ./data/sessions
-dpm-agent chat --sessions-dir ./data/sessions --thread-id work
+agents --sessions-dir ./data/sessions
+agents chat --sessions-dir ./data/sessions --thread-id work
 ```
 
 默认不会显示中间请求日志，只显示交互内容。需要调试时可以启动时打开：
 
 ```bash
-dpm-agent --debug
+agents --debug
 ```
 
 也可以在交互模式中动态开关：
@@ -194,7 +201,7 @@ dpm-agent --debug
 指定会话 ID 启动连续对话：
 
 ```bash
-dpm-agent chat --thread-id work
+agents chat --thread-id work
 ```
 
 交互模式中输入 `/exit` 或 `/quit` 退出。同一个 `thread_id` 的历史会自动从 SQLite 读取并继续。使用 `--new` 会生成随机 `thread_id`，因此会进入一个全新的 `data/sessions/<session-id>/` 目录。
@@ -202,13 +209,124 @@ dpm-agent chat --thread-id work
 也可以发送单条消息后退出：
 
 ```bash
-dpm-agent chat --thread-id demo --message "帮我整理今天的任务"
-dpm-agent chat --new --message "帮我整理今天的任务"
+agents chat --thread-id demo --message "帮我整理今天的任务"
+agents chat --new --message "帮我整理今天的任务"
 ```
 
 首次运行会自动创建 SQLite 表。
 
 CLI 会区分显示用户输入、Agent 流式输出、思考/步骤、工具调用和工具结果。SQLite 的 `messages` 表会通过 `message_type` 和 `metadata_json` 保存这些不同类型的事件；普通历史续聊只会把用户消息和最终助手消息重新送入模型上下文。
+
+## 自定义 Agent（详细示例）
+
+下面给一个完整示例：新增一个 `research_assistant` Agent，包含自定义系统提示词、工具 provider、可选 subagent，并演示如何启动。
+
+### 1) 定义一个自定义 Tool Provider（可复用）
+
+例如新增文件：`src/agents/tools/research.py`
+
+```python
+from __future__ import annotations
+
+from collections.abc import Iterable
+from typing import Any
+
+from langchain_core.tools import tool
+
+
+@tool
+def web_search(query: str) -> str:
+    """Search relevant information for the user query."""
+    # 这里只是示例，实际可接入你自己的搜索服务
+    return f"search result for: {query}"
+
+
+class ResearchToolProvider:
+    def tools_for_thread(self, thread_id: str) -> Iterable[Any]:
+        return (web_search,)
+```
+
+### 2) 在 `DEFAULT_AGENT_REGISTRY` 中注册自定义 Agent
+
+编辑 `src/agents/core/agent.py`，在 `DEFAULT_AGENT_REGISTRY` 里增加一个 `AgentDefinition`：
+
+```python
+from agents.tools.research import ResearchToolProvider
+
+DEFAULT_AGENT_REGISTRY = AgentRegistry(
+    (
+        AgentDefinition(name="default", system_prompt=DEFAULT_SYSTEM_PROMPT),
+        AgentDefinition(
+            name="db_explorer",
+            system_prompt=(
+                "你是一个数据库探索 Agent。优先通过工具查看 schema 和数据，再给出结论；避免假设不存在的表结构。"
+            ),
+        ),
+        AgentDefinition(
+            name="research_assistant",
+            system_prompt=(
+                "你是研究助理 Agent。先检索信息，再给出结构化结论与引用建议。"
+            ),
+            include_memory=True,
+            include_skills=True,
+            include_builtin_tools=True,
+            tool_providers=(ResearchToolProvider(),),
+            # 如果你有 subagent，可在这里注入；没有可省略
+            subagents=(),
+            create_kwargs={},
+        ),
+    )
+)
+```
+
+`AgentDefinition` 常用字段说明：
+
+- `name`：Agent 唯一名字（CLI/API 启动参数用这个）。
+- `system_prompt`：该 Agent 的系统提示词。
+- `include_memory` / `include_skills`：是否自动注入 session 下 `memory/`、`skills/`。
+- `include_builtin_tools`：是否保留内置工具（例如 calculator）。
+- `tool_providers`：该 Agent 专属工具 provider。
+- `subagents`：传给 `create_deep_agent` 的子 Agent 列表（按你的 DeepAgents 用法填充）。
+- `create_kwargs`：透传给 `create_deep_agent` 的额外参数。
+
+### 3) 启动自定义 Agent
+
+#### CLI 启动
+
+```bash
+# 交互式
+agents research_assistant
+
+# 指定 thread_id
+agents research_assistant chat --thread-id research-demo
+
+# 单轮对话
+agents research_assistant chat --thread-id research-demo --message "帮我调研一下向量数据库选型"
+```
+
+#### API 启动
+
+```bash
+agents-api --agent research_assistant --host 127.0.0.1 --port 8000
+```
+
+或：
+
+```bash
+python -m agents.interfaces.api --agent research_assistant --host 127.0.0.1 --port 8000
+```
+
+### 4) 在代码中按 Agent 名称装配 Service
+
+```python
+from agents.application.bootstrap import build_service
+
+service = build_service(agent_name="research_assistant")
+result = service.chat(thread_id="demo", message="给我一个调研计划")
+print(result.reply)
+```
+
+> 提示：如果你启动时出现 `Unknown agent 'xxx'`，说明该名称还未注册到 `DEFAULT_AGENT_REGISTRY`。
 
 ### 在 PyCharm 中启动 CLI
 
@@ -221,7 +339,7 @@ CLI 会区分显示用户输入、Agent 流式输出、思考/步骤、工具调
    - `AGENT_OPENAI_BASE_URL=https://<your-endpoint>/v1`
    - `AGENT_MODEL=openai:gpt-4.1`
 6. `Parameters` 可选：
-   - 连续对话：留空（等价 `dpm-agent`）
+   - 连续对话：留空（等价 `agents`）
    - 新会话：`--new`
    - 单条消息：`chat --thread-id demo --message "你好"`
 
@@ -287,7 +405,7 @@ python -m agents.interfaces.api --host 127.0.0.1 --port 8000
 安装为可执行命令后也支持：
 
 ```bash
-dpm-agent-api --host 127.0.0.1 --port 8000
+agents-api --host 127.0.0.1 --port 8000
 ```
 
 ### 在 PyCharm 中启动 API

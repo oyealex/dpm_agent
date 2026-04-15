@@ -1,1 +1,1 @@
-"""DPM Agent package."""
+"""Agents package."""

@@ -6,7 +6,7 @@ from pathlib import Path
 from threading import RLock
 
 from agents.config import Settings
-from agents.core.agent import AgentRuntime
+from agents.core.agent import DEFAULT_AGENT_REGISTRY, AgentRuntime
 from agents.core.service import AgentService
 from agents.core.tools import AgentToolProvider
 from agents.storage.db import connect_database, initialize_database
@@ -20,6 +20,7 @@ def build_service(
     sessions_dir: Path | None = None,
     tool_providers: Iterable[AgentToolProvider] = (),
     include_builtin_tools: bool = True,
+    agent_name: str = "default",
 ) -> AgentService:
     settings = Settings(sessions_dir=sessions_dir) if sessions_dir else Settings()
     settings.ensure_directories()
@@ -44,11 +45,13 @@ def build_service(
     initialize_database(database)
     database_lock = RLock()
 
-    providers = tuple(tool_providers)
-    if include_builtin_tools:
+    definition = DEFAULT_AGENT_REGISTRY.get(agent_name)
+
+    providers = (*definition.tool_providers, *tuple(tool_providers))
+    if include_builtin_tools and definition.include_builtin_tools:
         providers = (*default_tool_providers(), *providers)
 
-    runtime = AgentRuntime(settings=settings, tool_providers=providers)
+    runtime = AgentRuntime(settings=settings, definition=definition, tool_providers=providers)
     return AgentService(
         settings=settings,
         chat_repository=ChatRepository(database, lock=database_lock),

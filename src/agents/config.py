@@ -18,7 +18,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    app_name: str = "dpm-agent"
+    app_name: str = "agents"
     debug: bool = False
     model: str = "openai:gpt-4.1"
     storage_backend: str = "sqlite"

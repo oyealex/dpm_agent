@@ -9,13 +9,18 @@ from agents.core.service import AgentService
 from agents.interfaces.api.schemas import ChatRequest, ChatResponse
 from agents.interfaces.api.sse import stream_agent_events
 from agents.application.bootstrap import build_service
+from agents.core.agent import DEFAULT_AGENT_REGISTRY
 
 
-def create_app(service: AgentService | None = None) -> FastAPI:
-    app = FastAPI(title="DPM Agent API")
+def create_app(service: AgentService | None = None, agent_name: str = "default") -> FastAPI:
+    app = FastAPI(title="Agents API")
     settings = service.settings if service is not None else Settings()
+    if service is None and agent_name not in DEFAULT_AGENT_REGISTRY.list_names():
+        options = ", ".join(DEFAULT_AGENT_REGISTRY.list_names())
+        raise ValueError(f"Unknown agent '{agent_name}'. Available: {options}")
     _configure_cors(app, settings)
-    app.state.agent_service = service or build_service()
+    app.state.agent_name = agent_name
+    app.state.agent_service = service or build_service(agent_name=agent_name)
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
@@ -66,7 +71,7 @@ def main() -> None:
     run_server()
 
 
-app = create_app()
+app = create_app(agent_name="default")
 
 
 if __name__ == "__main__":

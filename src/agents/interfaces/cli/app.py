@@ -10,25 +10,42 @@ from agents.interfaces.cli.parser import build_parser
 from agents.interfaces.cli.renderer import color, render_stream
 from agents.logging import configure_logging, set_logging_verbose
 from agents.application.bootstrap import build_service
+from agents.core.agent import DEFAULT_AGENT_REGISTRY
 from agents.sanitize import sanitize_text
 
 
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
+    _normalize_args(args)
     settings = Settings()
     configure_logging(verbose=settings.debug if args.debug is None else args.debug)
+    _validate_agent_name(args.agent_name)
 
-    if args.command in {None, "chat"}:
+    if args.command == "chat":
         thread_id = _resolve_thread_id(args)
-        service = build_service(sessions_dir=args.sessions_dir)
+        service = build_service(sessions_dir=args.sessions_dir, agent_name=args.agent_name)
         if args.message:
             args.message = sanitize_text(args.message)
             print(color(f"You> {args.message}", "user"))
             render_stream(service.chat_stream(thread_id=thread_id, message=args.message))
             return
 
-        run_interactive_chat(service=service, thread_id=thread_id)
+        run_interactive_chat(service=service, thread_id=thread_id, agent_name=args.agent_name)
+
+
+
+
+def _validate_agent_name(agent_name: str) -> None:
+    available = DEFAULT_AGENT_REGISTRY.list_names()
+    if agent_name not in available:
+        options = ", ".join(available)
+        raise SystemExit(f"Unknown agent '{agent_name}'. Available: {options}")
+
+
+def _normalize_args(args: argparse.Namespace) -> None:
+    if args.agent_name == "chat" and args.command == "chat":
+        args.agent_name = "default"
 
 
 def _resolve_thread_id(args: argparse.Namespace) -> str:
@@ -37,8 +54,8 @@ def _resolve_thread_id(args: argparse.Namespace) -> str:
     return sanitize_text(args.thread_id)
 
 
-def run_interactive_chat(service: AgentService, thread_id: str) -> None:
-    print(f"DPM Agent interactive chat started. thread_id={thread_id}")
+def run_interactive_chat(service: AgentService, thread_id: str, agent_name: str = "default") -> None:
+    print(f"Agents interactive chat started. agent={agent_name} thread_id={thread_id}")
     print(f"Sessions dir: {service.settings.effective_sessions_dir}")
     print(f"Session dir: {service.settings.effective_session_dir(thread_id)}")
     print(f"Session skills: {service.settings.effective_session_skills_dir(thread_id)}")

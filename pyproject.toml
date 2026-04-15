@@ -1,5 +1,5 @@
 [project]
-name = "dpm-agent"
+name = "agents"
 version = "0.1.0"
 description = "Personal DeepAgents application with skills, memory, and pluggable persistence."
 readme = "README.md"
@@ -23,8 +23,8 @@ postgres = [
 ]
 
 [project.scripts]
-dpm-agent = "agents.cli:main"
-dpm-agent-api = "agents.api:main"
+agents = "agents.cli:main"
+agents-api = "agents.api:main"
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]
