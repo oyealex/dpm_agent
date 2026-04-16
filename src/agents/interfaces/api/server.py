@@ -6,6 +6,7 @@ from pathlib import Path
 
 from agents.config import Settings, SettingsError
 from agents.core.definitions import AgentConfigError, load_agent_registry
+from agents.runtime_encoding import enforce_utf8_runtime
 
 
 INSTALL_API_MESSAGE = (
@@ -54,6 +55,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    enforce_utf8_runtime()
     parser = build_parser()
     args = parser.parse_args()
     try:

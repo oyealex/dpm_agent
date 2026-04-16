@@ -420,6 +420,43 @@ agents-api --host 127.0.0.1 --port 8000
 agents-api --agent default --agent-config ./agents.yaml --host 127.0.0.1 --port 8000
 ```
 
+### 宿主进程拉起 `agents.api` 的 UTF-8 编码建议
+
+若 `agents-api` 由外层宿主进程（如桌面端或服务编排器）通过子进程拉起，建议统一采用 UTF-8：
+
+1. 文本模式读取 stdout/stderr 时，显式指定 `encoding="utf-8"` + `errors="replace"`。
+2. 子进程环境变量补齐 `PYTHONUTF8=1`、`PYTHONIOENCODING=utf-8`。
+3. Windows 若经过 `cmd` / `powershell` 中转，先切换 UTF-8 code page（如 `chcp 65001`），或改为字节模式读取再自行解码。
+4. 日志采集器应提供“解码失败降级策略”（`replace` + 原始字节摘要），避免 reader 线程因单条脏数据崩溃。
+
+Python 宿主示例：
+
+```python
+import hashlib
+import os
+import subprocess
+
+env = os.environ.copy()
+env.setdefault("PYTHONUTF8", "1")
+env.setdefault("PYTHONIOENCODING", "utf-8")
+
+proc = subprocess.Popen(
+    ["python", "-m", "agents.api", "--host", "127.0.0.1", "--port", "8000"],
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    text=True,
+    encoding="utf-8",
+    errors="replace",
+    env=env,
+)
+
+# 若使用 bytes 模式读取，可在 decode 失败时输出摘要用于定位：
+def decode_with_fallback(raw: bytes) -> str:
+    text = raw.decode("utf-8", errors="replace")
+    digest = hashlib.sha256(raw).hexdigest()[:12]
+    return f"{text} [raw_sha256={digest}]"
+```
+
 ### 在 PyCharm 中启动 API
 
 1. `Run | Edit Configurations...` 新建 **Python** 配置。
@@ -503,6 +540,19 @@ GET /users/default/chats/work/messages?limit=50&offset=0
 不存在的聊天历史返回空消息列表。`limit` 会被限制在系统允许的最大分页大小内。
 
 SSE 流不会返回 `internal_state` 事件；这类事件属于 DeepAgents/LangGraph 内部状态同步，不适合作为前端可见过程展示。
+
+建议重点回归子 Agent/工具链路（`chatModel=full`）：
+
+```bash
+curl -N -X POST "http://127.0.0.1:8000/agents/db_explorer/chat/stream" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sendUserAccount": "default",
+    "topicId": "db-regression",
+    "content": "帮我检查数据库表结构并给出建议",
+    "chatModel": "full"
+  }'
+```
 
 ### API 过滤层扩展（请求 / 响应 / SSE）
 

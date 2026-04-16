@@ -1,6 +1,8 @@
 from typing import Any
 from importlib import import_module
 
+from agents.runtime_encoding import enforce_utf8_runtime
+
 __all__ = ["app", "create_app", "main"]
 
 
@@ -16,6 +18,7 @@ def __getattr__(name: str) -> Any:
 
 
 def main() -> None:
+    enforce_utf8_runtime()
     from agents.interfaces.api.server import main as run_server
 
     run_server()
