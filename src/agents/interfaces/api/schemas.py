@@ -166,10 +166,7 @@ class AgentEventResponse(BaseModel):
         sub_agent: str | None = None,
         extension_fields: dict[str, Any] | None = None,
     ) -> AgentEventResponse:
-        if event.event_type in {"assistant_message", "tool_call", "thinking"}:
-            mapped_type = event.event_type
-        else:
-            mapped_type = "text"
+        mapped_type = "think" if event.event_type == "thinking" else "text"
         payload: dict[str, Any] = {
             "code": 0,
             "message": "",
