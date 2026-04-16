@@ -18,23 +18,49 @@ class SettingsError(ValueError):
     """Raised when runtime settings are missing or invalid."""
 
 
+class StorageSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    backend: str = "sqlite"
+    postgres_dsn: str | None = Field(default=None)
+    db_path: Path = Field(default=Path("./data/agent.sqlite3"))
+    sessions_dir: Path = Field(default=Path("./data/sessions"))
+
+
+class CorsSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    origins: str = ""
+    allow_credentials: bool = False
+    allow_methods: str = "*"
+    allow_headers: str = "*"
+
+
+class StreamSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    include_event_name: bool = False
+    include_assistant_message: bool = False
+
+
+class ApiSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    host: str = "127.0.0.1"
+    port: int = 8000
+    reload: bool = False
+    cors: CorsSettings = Field(default_factory=CorsSettings)
+    stream: StreamSettings = Field(default_factory=StreamSettings)
+
+
 class Settings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     app_name: str = "agents"
     debug: bool = False
-    storage_backend: str = "sqlite"
-    postgres_dsn: str | None = Field(default=None)
-    db_path: Path = Field(default=Path("./data/agent.sqlite3"))
-    sessions_dir: Path = Field(default=Path("./data/sessions"))
     default_user_id: str = "default"
-    api_host: str = "127.0.0.1"
-    api_port: int = 8000
-    api_reload: bool = False
-    cors_origins: str = ""
-    cors_allow_credentials: bool = False
-    cors_allow_methods: str = "*"
-    cors_allow_headers: str = "*"
+    storage: StorageSettings = Field(default_factory=StorageSettings)
+    api: ApiSettings = Field(default_factory=ApiSettings)
 
     @classmethod
     def load(cls, config_path: Path | None = None, **overrides: Any) -> Settings:
@@ -46,8 +72,9 @@ class Settings(BaseModel):
                 f"Agent config {path} must contain a top-level 'settings' mapping."
             )
         resolved = _resolve_env_references(settings_section, ("settings",))
+        normalized = _normalize_settings_payload(resolved)
         try:
-            return cls.model_validate({**resolved, **overrides})
+            return cls.model_validate({**normalized, **overrides})
         except ValidationError as exc:
             raise SettingsError(f"Invalid settings in {path}: {exc}") from exc
 
@@ -58,32 +85,56 @@ class Settings(BaseModel):
 
     @property
     def effective_storage_backend(self) -> str:
-        backend = sanitize_text(self.storage_backend).lower().strip()
+        backend = sanitize_text(self.storage.backend).lower().strip()
         return backend
 
     @property
     def effective_postgres_dsn(self) -> str | None:
-        return self.postgres_dsn
+        return self.storage.postgres_dsn
 
     @property
     def effective_cors_origins(self) -> list[str]:
-        return _split_csv(self.cors_origins)
+        return _split_csv(self.api.cors.origins)
 
     @property
     def effective_cors_allow_methods(self) -> list[str]:
-        return _split_csv(self.cors_allow_methods) or ["*"]
+        return _split_csv(self.api.cors.allow_methods) or ["*"]
 
     @property
     def effective_cors_allow_headers(self) -> list[str]:
-        return _split_csv(self.cors_allow_headers) or ["*"]
+        return _split_csv(self.api.cors.allow_headers) or ["*"]
 
     @property
     def effective_db_path(self) -> Path:
-        return self.db_path.expanduser().resolve()
+        return self.storage.db_path.expanduser().resolve()
 
     @property
     def effective_sessions_dir(self) -> Path:
-        return self.sessions_dir.expanduser().resolve()
+        return self.storage.sessions_dir.expanduser().resolve()
+
+    @property
+    def api_host(self) -> str:
+        return self.api.host
+
+    @property
+    def api_port(self) -> int:
+        return self.api.port
+
+    @property
+    def api_reload(self) -> bool:
+        return self.api.reload
+
+    @property
+    def cors_allow_credentials(self) -> bool:
+        return self.api.cors.allow_credentials
+
+    @property
+    def stream_include_event_name(self) -> bool:
+        return self.api.stream.include_event_name
+
+    @property
+    def stream_include_assistant_message(self) -> bool:
+        return self.api.stream.include_assistant_message
 
     @property
     def effective_default_user_id(self) -> str:
@@ -173,3 +224,36 @@ def _resolve_env_references(value: Any, key_path: tuple[str, ...]) -> Any:
                 )
             return sanitize_text(os.environ[env_name])
     return value
+
+
+def _normalize_settings_payload(raw_settings: dict[str, Any]) -> dict[str, Any]:
+    # 兼容旧版平铺 settings，同时统一归一到分组结构：
+    # storage / api / api.cors / api.stream。
+    normalized = dict(raw_settings)
+
+    if "storage" not in normalized:
+        normalized["storage"] = {
+            "backend": normalized.pop("storage_backend", "sqlite"),
+            "postgres_dsn": normalized.pop("postgres_dsn", None),
+            "db_path": normalized.pop("db_path", Path("./data/agent.sqlite3")),
+            "sessions_dir": normalized.pop("sessions_dir", Path("./data/sessions")),
+        }
+
+    if "api" not in normalized:
+        normalized["api"] = {
+            "host": normalized.pop("api_host", "127.0.0.1"),
+            "port": normalized.pop("api_port", 8000),
+            "reload": normalized.pop("api_reload", False),
+            "cors": {
+                "origins": normalized.pop("cors_origins", ""),
+                "allow_credentials": normalized.pop("cors_allow_credentials", False),
+                "allow_methods": normalized.pop("cors_allow_methods", "*"),
+                "allow_headers": normalized.pop("cors_allow_headers", "*"),
+            },
+            "stream": {
+                "include_event_name": normalized.pop("stream_include_event_name", False),
+                "include_assistant_message": normalized.pop("stream_include_assistant_message", False),
+            },
+        }
+
+    return normalized

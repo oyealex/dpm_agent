@@ -64,19 +64,30 @@ pip install -e ".[api]"
 settings:
   app_name: agents
   debug: false
-  storage_backend: sqlite
-  postgres_dsn: ${AGENT_POSTGRES_DSN}
-  db_path: ./data/agent.sqlite3
-  sessions_dir: ./data/sessions
   default_user_id: default
-  api_host: 127.0.0.1
-  api_port: 8000
-  api_reload: false
-  cors_origins: ""
-  cors_allow_credentials: false
-  cors_allow_methods: "*"
-  cors_allow_headers: "*"
+  storage:
+    backend: sqlite
+    postgres_dsn: ${AGENT_POSTGRES_DSN}
+    db_path: ./data/agent.sqlite3
+    sessions_dir: ./data/sessions
+  api:
+    host: 127.0.0.1
+    port: 8000
+    reload: false
+    cors:
+      origins: ""
+      allow_credentials: false
+      allow_methods: "*"
+      allow_headers: "*"
+    stream:
+      include_event_name: false
+      include_assistant_message: false
 ```
+
+`settings.api.stream` 说明：
+
+- `include_event_name: false`（默认）：SSE 仅输出 `data: {...}`，不输出 `event: ...` 行。
+- `include_assistant_message: false`（默认）：流式过程中只发送 `thinking` 和 `assistant_delta`，避免在尾部重复发送最终 `assistant_message`。
 
 常用启动方式：
 
@@ -95,7 +106,7 @@ print(settings.effective_sessions_dir)
 print(settings.effective_storage_backend)
 ```
 
-默认数据目录是当前目录下的 `data/`。SQLite 对话历史是全局共享数据库，默认是 `./data/agent.sqlite3`；PostgreSQL 使用 `agents.yaml` 中 `settings.postgres_dsn`。每个对话会按 `user_id` 和 `thread_id` 在 `./data/sessions/` 下创建独立文件目录，里面包含该用户会话自己的 `skills/` 和 `memory/`。`user_id` 是隔离标识，不是认证或授权机制；未指定时使用 `default`。
+默认数据目录是当前目录下的 `data/`。SQLite 对话历史是全局共享数据库，默认是 `./data/agent.sqlite3`；PostgreSQL 使用 `agents.yaml` 中 `settings.storage.postgres_dsn`。每个对话会按 `user_id` 和 `thread_id` 在 `./data/sessions/` 下创建独立文件目录，里面包含该用户会话自己的 `skills/` 和 `memory/`。`user_id` 是隔离标识，不是认证或授权机制；未指定时使用 `default`。
 
 ```text
 data/

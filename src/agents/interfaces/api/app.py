@@ -132,6 +132,7 @@ def create_app(
                     selected_agent_name=selected_agent_name,
                     app=app,
                 ),
+                include_event_name=agent_service.settings.stream_include_event_name,
                 encode_event=event_serializer,
             ),
             media_type="text/event-stream",
@@ -217,6 +218,12 @@ def _iter_filtered_events(
     app: FastAPI,
 ) -> Iterator[AgentEvent]:
     pipeline = _get_filter_pipeline(app)
+    settings = _get_agent_service(app, selected_agent_name).settings
+    # 流式接口默认只下发可增量渲染的事件，避免重复发送最终 assistant_message；
+    # 兼容场景可通过 settings.api.stream.include_assistant_message 打开。
+    allowed_event_types = {"thinking", "assistant_delta"}
+    if settings.stream_include_assistant_message:
+        allowed_event_types.add("assistant_message")
     for event in events:
         filtered_event = pipeline.apply_event(
             event,
@@ -225,7 +232,7 @@ def _iter_filtered_events(
         )
         if filtered_event is None:
             continue
-        if filtered_event.event_type not in {"thinking", "assistant_delta", "assistant_message"}:
+        if filtered_event.event_type not in allowed_event_types:
             continue
         yield filtered_event
 
