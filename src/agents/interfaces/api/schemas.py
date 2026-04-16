@@ -54,6 +54,12 @@ class ChatRequest(BaseModel):
         validation_alias=AliasChoices("messageId", "message_id"),
         description="消息 ID，用于追踪单次对话。",
     )
+    chat_model: Literal["thin", "normal", "full"] = Field(
+        default="thin",
+        alias="chatModel",
+        validation_alias=AliasChoices("chatModel", "chat_model"),
+        description="聊天输出模式：thin/normal/full，默认 thin。",
+    )
 
     @property
     def extension_fields(self) -> dict[str, Any]:
@@ -74,6 +80,11 @@ class ChatResponseData(BaseModel):
     )
     references: list[dict[str, Any]] = Field(default_factory=list, description="引用结果，当前固定空列表。")
     ask_more: list[str] = Field(default_factory=list, alias="askMore", description="追问内容，当前固定空列表。")
+    sub_agent: str | None = Field(
+        default=None,
+        alias="subAgent",
+        description="子 Agent 名称，仅在 chat_model=full 且事件来自子 Agent 时返回。",
+    )
 
 
 class ChatResponse(BaseModel):
@@ -152,9 +163,13 @@ class AgentEventResponse(BaseModel):
     def from_event(
         cls,
         event: AgentEvent,
+        sub_agent: str | None = None,
         extension_fields: dict[str, Any] | None = None,
     ) -> AgentEventResponse:
-        mapped_type = "think" if event.event_type == "thinking" else "text"
+        if event.event_type in {"assistant_message", "tool_call", "thinking"}:
+            mapped_type = event.event_type
+        else:
+            mapped_type = "text"
         payload: dict[str, Any] = {
             "code": 0,
             "message": "",
@@ -165,6 +180,8 @@ class AgentEventResponse(BaseModel):
                 "content": event.content,
             },
         }
+        if sub_agent:
+            payload["data"]["subAgent"] = sub_agent
         if extension_fields:
             payload.update(extension_fields)
         return cls.model_validate(payload)

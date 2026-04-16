@@ -54,14 +54,18 @@ def render_stream(events: object) -> None:
         if event.event_type == "assistant_message":
             if assistant_seen:
                 continue
-            print(color(f"\nAgent> {event.content}", "assistant"), flush=True)
+            prefix = _event_prefix(event)
+            print(color(f"\n{prefix}Agent> {event.content}", "assistant"), flush=True)
             assistant_seen = True
         elif event.event_type == "thinking":
-            print(color(f"\nThinking> {event.content}", "thinking"), flush=True)
+            prefix = _event_prefix(event)
+            print(color(f"\n{prefix}Thinking> {event.content}", "thinking"), flush=True)
         elif event.event_type == "tool_call":
-            print(color(f"\nTool call> {_preview_tool_call(event.content)}", "tool"), flush=True)
+            prefix = _event_prefix(event)
+            print(color(f"\n{prefix}Tool call> {_preview_tool_call(event.content)}", "tool"), flush=True)
         elif event.event_type == "tool_result":
-            print(color(f"\nTool result> {event.content}", "tool"), flush=True)
+            prefix = _event_prefix(event)
+            print(color(f"\n{prefix}Tool result> {event.content}", "tool"), flush=True)
         elif event.event_type == "agent_step":
             print(color(f"\nEvent> {event.content}", "system"), flush=True)
         elif event.event_type == "internal_state":
@@ -76,3 +80,21 @@ def _preview_tool_call(content: str) -> str:
         return content
     remaining = len(content) - TOOL_CALL_PREVIEW_LIMIT
     return f"{content[:TOOL_CALL_PREVIEW_LIMIT]}... (remaining {remaining} chars)"
+
+
+def _event_prefix(event: AgentEvent) -> str:
+    subagent_name = _extract_subagent_name(event)
+    if not subagent_name:
+        return ""
+    return f"SubAgent({subagent_name}) > "
+
+
+def _extract_subagent_name(event: AgentEvent) -> str | None:
+    metadata = event.metadata or {}
+    node = metadata.get("node")
+    if not isinstance(node, str):
+        return None
+    parts = [part.strip() for part in node.split("/") if part.strip()]
+    if len(parts) < 2:
+        return None
+    return parts[0]

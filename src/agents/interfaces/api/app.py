@@ -117,12 +117,17 @@ def create_app(
         )
 
         def event_serializer(event: AgentEvent) -> AgentEventResponse:
+            sub_agent = _extract_subagent_name(event)
             extension_fields = _get_filter_pipeline(app).collect_event_fields(
                 event,
                 request=request,
                 agent_name=selected_agent_name,
             )
-            return AgentEventResponse.from_event(event, extension_fields=extension_fields)
+            return AgentEventResponse.from_event(
+                event,
+                sub_agent=sub_agent if request.chat_model == "full" else None,
+                extension_fields=extension_fields,
+            )
 
         return StreamingResponse(
             stream_agent_events(
@@ -218,12 +223,10 @@ def _iter_filtered_events(
     app: FastAPI,
 ) -> Iterator[AgentEvent]:
     pipeline = _get_filter_pipeline(app)
-    settings = _get_agent_service(app, selected_agent_name).settings
-    # 流式接口默认只下发可增量渲染的事件，避免重复发送最终 assistant_message；
-    # 兼容场景可通过 settings.api.stream.include_assistant_message 打开。
-    allowed_event_types = {"thinking", "assistant_delta"}
-    if settings.stream_include_assistant_message:
-        allowed_event_types.add("assistant_message")
+    if request.chat_model == "thin":
+        allowed_event_types = {"assistant_message"}
+    else:
+        allowed_event_types = {"assistant_message", "tool_call", "thinking"}
     for event in events:
         filtered_event = pipeline.apply_event(
             event,
@@ -232,9 +235,23 @@ def _iter_filtered_events(
         )
         if filtered_event is None:
             continue
+        sub_agent = _extract_subagent_name(filtered_event)
+        if request.chat_model != "full" and sub_agent:
+            continue
         if filtered_event.event_type not in allowed_event_types:
             continue
         yield filtered_event
+
+
+def _extract_subagent_name(event: AgentEvent) -> str | None:
+    metadata = event.metadata or {}
+    node = metadata.get("node")
+    if not isinstance(node, str):
+        return None
+    parts = [part.strip() for part in node.split("/") if part.strip()]
+    if len(parts) < 2:
+        return None
+    return parts[0]
 
 
 def _configure_cors(app: FastAPI, settings: Settings) -> None:

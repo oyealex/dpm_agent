@@ -451,6 +451,7 @@ agents-api --agent default --agent-config ./agents.yaml --host 127.0.0.1 --port 
   "clientLang": "zh",
   "clientType": "asst-pc",
   "messageId": "msg-001",
+  "chatModel": "thin",
   "tenant_id": "acme",
   "scene": "daily_planning"
 }
@@ -466,6 +467,10 @@ agents-api --agent default --agent-config ./agents.yaml --host 127.0.0.1 --port 
 - `clientLang`：客户端语言，`zh`（默认）或 `en`。
 - `clientType`：客户端类型，`asst-pc` / `asst-wecode`，未知可为 `null`。
 - `messageId`：消息 ID，可选。
+- `chatModel`：聊天输出模式（兼容旧字段 `chat_model`），默认 `thin`。
+  - `thin`：仅返回**主 Agent**的 `assistant_message`。
+  - `normal`：返回**主 Agent**的 `assistant_message`、`tool_call`、`thinking`。
+  - `full`：在 `normal` 基础上，额外返回**子 Agent**同类型消息，并在响应 `data.subAgent` 标注子 Agent 名称。
 
 同步与流式响应均使用统一结构：
 
@@ -482,12 +487,13 @@ agents-api --agent default --agent-config ./agents.yaml --host 127.0.0.1 --port 
     "searching": [],
     "searchResult": [],
     "references": [],
-    "askMore": []
+    "askMore": [],
+    "subAgent": null
   }
 }
 ```
 
-其中 `data.type` 枚举包含 `planning/searching/searchResult/reference/think/text/askMore`，当前仅输出 `think` 和 `text`。历史查询支持 `limit` 和 `offset`，例如：
+其中 `data.type` 为事件类型：`assistant_message`、`tool_call`、`thinking`（不匹配时降级为 `text`）；`data.subAgent` 仅在 `chatModel=full` 且事件来自子 Agent 时返回。历史查询支持 `limit` 和 `offset`，例如：
 
 ```text
 GET /users/default/chats?limit=20&offset=0
