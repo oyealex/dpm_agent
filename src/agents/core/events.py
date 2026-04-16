@@ -117,6 +117,16 @@ def _events_from_message(
     )
 
     if stream_delta and message_type.endswith("AIMessageChunk"):
+        tool_calls = getattr(message, "tool_calls", None) or []
+        for tool_call in tool_calls:
+            if not _is_complete_tool_call(tool_call):
+                continue
+            yield AgentEvent(
+                event_type="tool_call",
+                role="tool",
+                content=_tool_call_content(tool_call),
+                metadata=_safe_metadata(tool_call),
+            )
         if text:
             yield AgentEvent(
                 event_type="assistant_delta",
