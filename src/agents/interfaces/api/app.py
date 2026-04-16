@@ -67,26 +67,43 @@ def create_app(
         agent_service = _get_agent_service(app, selected_agent_name)
         request = _get_filter_pipeline(app).apply_request(request, agent_name=selected_agent_name)
         user_id = agent_service.settings.normalize_user_id(request.user_id)
-        result = agent_service.chat(
-            thread_id=request.thread_id,
-            message=request.message,
-            user_id=user_id,
-        )
-        extension_fields = _get_filter_pipeline(app).collect_chat_response_fields(
-            result,
-            request=request,
-            agent_name=selected_agent_name,
-        )
-        payload = {
-            "user_id": result.user_id,
-            "thread_id": result.thread_id,
-            "reply": result.reply,
-        }
-        if extension_fields:
-            payload.update(extension_fields)
-        return ChatResponse.model_validate(
-            payload,
-        )
+        try:
+            result = agent_service.chat(
+                thread_id=request.thread_id,
+                message=request.message,
+                user_id=user_id,
+            )
+            extension_fields = _get_filter_pipeline(app).collect_chat_response_fields(
+                result,
+                request=request,
+                agent_name=selected_agent_name,
+            )
+            payload = {
+                "code": 0,
+                "message": "",
+                "error": "",
+                "isFinish": True,
+                "data": {
+                    "type": "text",
+                    "content": result.reply,
+                },
+            }
+            if extension_fields:
+                payload.update(extension_fields)
+            return ChatResponse.model_validate(payload)
+        except Exception as exc:
+            return ChatResponse.model_validate(
+                {
+                    "code": -1,
+                    "message": "",
+                    "error": str(exc),
+                    "isFinish": True,
+                    "data": {
+                        "type": "text",
+                        "content": "",
+                    },
+                }
+            )
 
     @app.post("/agents/{selected_agent_name}/chat/stream")
     def chat_stream_for_agent(selected_agent_name: str, request: ChatRequest) -> StreamingResponse:
@@ -206,8 +223,11 @@ def _iter_filtered_events(
             request=request,
             agent_name=selected_agent_name,
         )
-        if filtered_event is not None:
-            yield filtered_event
+        if filtered_event is None:
+            continue
+        if filtered_event.event_type not in {"thinking", "assistant_delta", "assistant_message"}:
+            continue
+        yield filtered_event
 
 
 def _configure_cors(app: FastAPI, settings: Settings) -> None:

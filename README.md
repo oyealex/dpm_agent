@@ -287,7 +287,7 @@ GET /users/{user_id}/chats
 GET /users/{user_id}/chats/{thread_id}/messages
 ```
 
-请求体不支持切换 Agent；用户通过 Body 中的 `user_id` 区分，未传时使用默认用户 `default`。
+请求体不支持切换 Agent；用户通过 Body 中的 `sendUserAccount` 区分（兼容旧字段 `user_id`），未传时使用默认用户 `default`。
 
 ### 自定义 Tool Provider
 
@@ -421,8 +421,8 @@ agents-api --agent default --agent-config ./agents.yaml --host 127.0.0.1 --port 
 接口：
 
 - `GET /healthz`：健康检查
-- `POST /chat`：同步对话，返回最终回复
-- `POST /chat/stream`：SSE 流式对话，逐条返回面向调用方可展示的 `AgentEvent`，结束时发送 `done`
+- `POST /chat`：同步对话，返回标准响应包（`code/message/error/isFinish/data`）
+- `POST /chat/stream`：SSE 流式对话，逐条返回标准响应包，结束时发送 `done`
 - `POST /agents/{agent_name}/chat`：按 URL 中的 Agent 名称同步对话
 - `POST /agents/{agent_name}/chat/stream`：按 URL 中的 Agent 名称 SSE 流式对话
 - `GET /users/{user_id}/chats`：分页查询指定用户的聊天会话列表
@@ -432,15 +432,51 @@ agents-api --agent default --agent-config ./agents.yaml --host 127.0.0.1 --port 
 
 ```json
 {
-  "user_id": "default",
-  "thread_id": "default",
-  "message": "帮我整理今天的任务",
+  "sendUserAccount": "default",
+  "topicId": "default",
+  "type": "text",
+  "content": "帮我整理今天的任务",
+  "imGroupId": null,
+  "clientLang": "zh",
+  "clientType": "asst-pc",
+  "messageId": "msg-001",
   "tenant_id": "acme",
   "scene": "daily_planning"
 }
 ```
 
-同步聊天响应会返回实际使用的 `user_id` 和 `thread_id`，过滤层也可以把自定义字段直接追加为响应顶层字段（SSE 每条事件同理）。历史查询支持 `limit` 和 `offset`，例如：
+字段说明：
+
+- `sendUserAccount`：用户账号（兼容旧字段 `user_id`）。
+- `topicId`：会话 ID（兼容旧字段 `thread_id`）。
+- `type`：消息类型，`text`（默认）或 `IMAGE-V1`。
+- `content`：消息内容。`text` 时为文本；`IMAGE-V1` 时传 `{fileId,extractCode}` 的 JSON 列表字符串。
+- `imGroupId`：群 ID，可为 `null`。
+- `clientLang`：客户端语言，`zh`（默认）或 `en`。
+- `clientType`：客户端类型，`asst-pc` / `asst-wecode`，未知可为 `null`。
+- `messageId`：消息 ID，可选。
+
+同步与流式响应均使用统一结构：
+
+```json
+{
+  "code": 0,
+  "message": "",
+  "error": "",
+  "isFinish": true,
+  "data": {
+    "type": "text",
+    "content": "...",
+    "planning": "",
+    "searching": [],
+    "searchResult": [],
+    "references": [],
+    "askMore": []
+  }
+}
+```
+
+其中 `data.type` 枚举包含 `planning/searching/searchResult/reference/think/text/askMore`，当前仅输出 `think` 和 `text`。历史查询支持 `limit` 和 `offset`，例如：
 
 ```text
 GET /users/default/chats?limit=20&offset=0
@@ -455,7 +491,7 @@ SSE 流不会返回 `internal_state` 事件；这类事件属于 DeepAgents/Lang
 
 API 入口新增可组合过滤层 `ApiFilterPipeline`，可在不改动 `AgentService` 的情况下做定制：
 
-- 解析和改写入参（包括与 `thread_id/message/user_id` 平级的自定义字段）
+- 解析和改写入参（包括与 `topicId/content/sendUserAccount` 平级的自定义字段，兼容旧字段）
 - 按条件过滤或改写 SSE 事件对象
 - 为同步响应和 SSE 事件追加顶层自定义字段
 

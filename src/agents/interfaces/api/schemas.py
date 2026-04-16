@@ -1,30 +1,89 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from agents.domain.models import AgentEvent, Message, ThreadSummary
 
 
 class ChatRequest(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
 
-    thread_id: str
-    message: str
-    user_id: str | None = None
+    thread_id: str = Field(
+        alias="topicId",
+        validation_alias=AliasChoices("topicId", "thread_id"),
+        description="会话主题 ID（原 thread_id）。",
+    )
+    message: str = Field(
+        alias="content",
+        validation_alias=AliasChoices("content", "message"),
+        description="用户发送内容。文本消息为纯文本；图片消息为 JSON 列表字符串。",
+    )
+    user_id: str | None = Field(
+        default=None,
+        alias="sendUserAccount",
+        validation_alias=AliasChoices("sendUserAccount", "user_id"),
+        description="发送用户账号（原 user_id），未传时使用默认用户。",
+    )
+    type: Literal["text", "IMAGE-V1"] = Field(
+        default="text",
+        description="消息类型：text 或 IMAGE-V1。",
+    )
+    im_group_id: str | None = Field(
+        default=None,
+        alias="imGroupId",
+        validation_alias=AliasChoices("imGroupId", "im_group_id"),
+        description="群 ID，可为空。",
+    )
+    client_lang: Literal["zh", "en"] = Field(
+        default="zh",
+        alias="clientLang",
+        validation_alias=AliasChoices("clientLang", "client_lang"),
+        description="客户端语言：zh 或 en。",
+    )
+    client_type: Literal["asst-pc", "asst-wecode"] | None = Field(
+        default=None,
+        alias="clientType",
+        validation_alias=AliasChoices("clientType", "client_type"),
+        description="客户端类型：asst-pc、asst-wecode，未知可为空。",
+    )
+    message_id: str | None = Field(
+        default=None,
+        alias="messageId",
+        validation_alias=AliasChoices("messageId", "message_id"),
+        description="消息 ID，用于追踪单次对话。",
+    )
 
     @property
     def extension_fields(self) -> dict[str, Any]:
         return dict(self.model_extra or {})
 
 
+class ChatResponseData(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    type: str = Field(description="响应数据类型。当前仅输出 think 或 text。")
+    content: str = Field(default="", description="响应文本内容。")
+    planning: str = Field(default="", description="规划内容，当前固定空字符串。")
+    searching: list[str] = Field(default_factory=list, description="搜索内容，当前固定空列表。")
+    search_result: list[dict[str, Any]] = Field(
+        default_factory=list,
+        alias="searchResult",
+        description="搜索结果，当前固定空列表。",
+    )
+    references: list[dict[str, Any]] = Field(default_factory=list, description="引用结果，当前固定空列表。")
+    ask_more: list[str] = Field(default_factory=list, alias="askMore", description="追问内容，当前固定空列表。")
+
+
 class ChatResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    user_id: str
-    thread_id: str
-    reply: str
+    code: int = Field(default=0, description='状态码，成功为 0，错误统一为 -1。')
+    message: str = Field(default="", description="提示信息，当前固定空字符串。")
+    error: str = Field(default="", description="异常信息，成功时为空。")
+    is_finish: bool = Field(alias="isFinish", description="是否流式结束。同步接口恒为 true。")
+    data: ChatResponseData = Field(description="响应载荷。")
 
 
 class ThreadSummaryResponse(BaseModel):
@@ -83,10 +142,11 @@ class ChatHistoryResponse(BaseModel):
 class AgentEventResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    event_type: str
-    role: str
-    content: str
-    metadata: dict[str, Any] | None = None
+    code: int = Field(default=0, description='状态码，成功为 0，错误统一为 -1。')
+    message: str = Field(default="", description="提示信息，当前固定空字符串。")
+    error: str = Field(default="", description="异常信息，成功时为空。")
+    is_finish: bool = Field(default=False, alias="isFinish", description="流式响应是否结束。")
+    data: ChatResponseData = Field(description="事件载荷。")
 
     @classmethod
     def from_event(
@@ -94,11 +154,16 @@ class AgentEventResponse(BaseModel):
         event: AgentEvent,
         extension_fields: dict[str, Any] | None = None,
     ) -> AgentEventResponse:
+        mapped_type = "think" if event.event_type == "thinking" else "text"
         payload: dict[str, Any] = {
-            "event_type": event.event_type,
-            "role": event.role,
-            "content": event.content,
-            "metadata": event.metadata,
+            "code": 0,
+            "message": "",
+            "error": "",
+            "isFinish": False,
+            "data": {
+                "type": mapped_type,
+                "content": event.content,
+            },
         }
         if extension_fields:
             payload.update(extension_fields)

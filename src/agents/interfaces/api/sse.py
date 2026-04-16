@@ -23,6 +23,18 @@ def stream_agent_events(
     for agent_event in events:
         if agent_event.event_type == "internal_state":
             continue
-        payload = serializer(agent_event).model_dump()
+        payload = serializer(agent_event).model_dump(by_alias=True)
         yield encode_sse_event(agent_event.event_type, payload)
-    yield encode_sse_event("done", {"status": "ok"})
+    yield encode_sse_event(
+        "done",
+        {
+            "code": 0,
+            "message": "",
+            "error": "",
+            "isFinish": True,
+            "data": {
+                "type": "text",
+                "content": "",
+            },
+        },
+    )
